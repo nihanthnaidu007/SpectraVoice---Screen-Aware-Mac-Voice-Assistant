@@ -1,168 +1,245 @@
-# ## SpectraVoice – Screen-Aware Mac Voice Assistant
+## SpectraVoice – Screen-Aware Mac Voice Assistant
 
-SpectraVoice is a hands-free voice assistant for macOS that can see your screen, control your keyboard and mouse, search the web, and respond with fast, natural speech. It supports both OpenAI (cloud) and Ollama (local) models, with barge‑in, conversation memory, and a focus on honest, tool-driven actions.
+SpectraVoice is a hands-free voice assistant for macOS that can see your screen, control your keyboard and mouse, search the web, and respond with fast, natural speech. It supports both OpenAI GPT‑5 (cloud) and Ollama (local) models, with barge‑in, short-term conversation memory, and a focus on honest, tool-driven actions.
+
+---
 
 ## Features
 
-- 🎤 **Voice Recognition**: Powered by OpenAI Whisper (local processing)
-- 👁️ **Screen Analysis**: Can see and understand your desktop in real-time
-- 🧠 **Conversation Memory**: Remembers last 10 exchanges for context
-- 🗣️ **Natural Speech**: High-quality text-to-speech with 6 voice options
-- 🔧 **Function Calling**: Execute actions on your computer via voice commands
+- 🎤 **Voice Recognition**: Uses Whisper for speech-to-text
+- 👁️ **Screen Analysis**: Can see and understand your desktop in real time
+- 🧠 **Conversation Memory**: Remembers recent exchanges for context
+- 🗣️ **Natural Speech**: High-quality text-to-speech with multiple voices
+- 🔧 **Function Calling**: Executes real actions on your computer via tools
 - 🌐 **Web Search**: Real-time web search for current information
-- ☁️ **Cloud LLM**: OpenAI GPT-4o for maximum quality and vision support
+- ☁️ **Cloud LLM**: OpenAI GPT‑5 family for maximum quality and vision support
 - 🏠 **Local LLM**: Ollama for privacy and offline use (DeepSeek, LLaMA, etc.)
-- ⚡ **Multiple Modes**: Terminal, GUI, and minimal modes for different needs
+- ⚡ **Multiple Modes**: Terminal, GUI, and minimal modes
 - 🐛 **Debug Mode**: Performance metrics and verbose logging
 - 🎙️ **Customizable**: Choose TTS voice and Whisper model size
 - 📍 **Status Indicator**: Small on-screen indicator showing assistant state
+
+---
 
 ## Voice Commands (Function Calling)
 
 Control your computer with voice:
 
-| Command | Example |
-|---------|---------|
-| **Open Apps** | "Open Chrome", "Open Notes", "Open Spotify" |
-| **Browse Web** | "Go to YouTube", "Open github.com" |
-| **Type Text** | "Type hello world" |
-| **Keyboard Shortcuts** | "Copy this", "Paste", "Save" |
-| **File Search** | "Search for my resume", "Find presentation files" |
-| **Screenshots** | "Take a screenshot" |
-| **Scroll** | "Scroll down", "Scroll up" |
-| **Terminal** | "Run ls command", "Show current directory" |
+| Command              | Example                                      |
+|----------------------|----------------------------------------------|
+| **Open Apps**        | “Open Chrome”, “Open Notes”, “Open Spotify” |
+| **Browse Web**       | “Go to YouTube”, “Open github.com”          |
+| **Type Text**        | “Type hello world”                          |
+| **Keyboard Shortcuts** | “Copy this”, “Paste”, “Save”              |
+| **File Search**      | “Search for my resume”, “Find presentation files” |
+| **Screenshots**      | “Take a screenshot”                         |
+| **Scroll**           | “Scroll down”, “Scroll up”                  |
+| **Terminal**         | “Run ls command”, “Show current directory”  |
 
-## Setup
+---
 
-### 1. API Key
+## Installation & Setup (step by step)
 
-Create a `.env` file in the project directory:
+Follow these steps in order. After this, you should be able to run SpectraVoice and talk to it.
+
+### 1. Get the code
+
+Using git (recommended):
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key_here
-TAVILY_API_KEY=your_tavily_api_key_here  # Optional: for web search
+git clone https://github.com/<your-username>/spectravoice.git
+cd spectravoice
 ```
 
-### 2. System Dependencies
+Or download the ZIP from GitHub and unzip it, then open a terminal and `cd` into that folder.
+
+### 2. Create and activate a virtual environment
+
+```bash
+python3 -m venv .venv
+
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows (PowerShell)
+# .venv\Scripts\Activate.ps1
+```
+
+You should see `(.venv)` at the beginning of your terminal prompt.
+
+### 3. Install system dependencies
+
+These are needed for audio and media handling.
 
 **macOS (Apple Silicon/Intel):**
+
 ```bash
 brew install portaudio ffmpeg
 ```
 
-**Ubuntu/Debian:**
+**Ubuntu/Debian (if you ever run it there):**
+
 ```bash
-sudo apt-get install portaudio19-dev python3-pyaudio ffmpeg
+sudo apt-get update
+sudo apt-get install -y portaudio19-dev python3-pyaudio ffmpeg
 ```
 
-**Windows:**
-- Install [FFmpeg](https://ffmpeg.org/download.html) and add to PATH
-- PyAudio should install automatically with pip
+(Windows is not the main target, but you would install FFmpeg and PortAudio separately.)
 
-### 3. Python Environment
+### 4. Install Python dependencies
+
+With the virtual environment active and inside the project folder:
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies (all exact versions included)
-pip install -U pip
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. macOS Permissions (Important!)
+### 5. Create `.env` and add API keys
 
-Grant these permissions in System Preferences → Privacy & Security:
-- **Microphone**: Allow access for Terminal/IDE
-- **Screen Recording**: Allow access for screen capture
-- **Accessibility**: Allow access for keyboard/mouse automation (function calling)
+In the project root, create a `.env` file:
+
+```bash
+# If there is an example file
+cp .env.example .env
+
+# Or create manually
+touch .env
+```
+
+Open `.env` and add:
+
+```env
+OPENAI_API_KEY="your_openai_api_key_here"
+TAVILY_API_KEY="your_tavily_api_key_here"  # Optional: for web search
+```
+
+- `OPENAI_API_KEY` is **required** for cloud mode (GPT‑5).
+- `TAVILY_API_KEY` is optional but improves web search.
+- Do **not** commit `.env` to GitHub.
+
+### 6. Grant macOS permissions (very important)
+
+On macOS, you must give your terminal/IDE permissions:
+
+1. Open **System Settings → Privacy & Security**.
+2. Under **Microphone**, enable access for:
+   - Terminal / iTerm / your IDE.
+3. Under **Screen Recording**, enable access for:
+   - Terminal / your IDE.
+4. Under **Accessibility**, enable access for:
+   - Terminal / your IDE (needed for keyboard/mouse control).
+
+You may need to quit and reopen the terminal or IDE after changing these.
+
+---
 
 ## LLM Provider Modes: Cloud vs Local (Ollama)
 
 SpectraVoice supports two LLM backends:
 
-| Feature | Cloud (OpenAI) | Local (Ollama) |
-|---------|----------------|----------------|
-| **Provider** | OpenAI GPT-4o | Ollama (llama3.2, llava, etc.) |
-| **Quality** | ⭐⭐⭐⭐⭐ Best | ⭐⭐⭐ Good |
-| **Vision** | ✅ Full support | ⚠️ Requires llava model |
-| **Tool Calling** | ✅ Native | ⚠️ Model-dependent |
-| **Privacy** | ❌ Data sent to OpenAI | ✅ 100% local |
-| **Offline** | ❌ Requires internet | ✅ Works offline |
-| **Cost** | 💰 API usage fees | 🆓 Free |
+| Feature       | Cloud (OpenAI GPT‑5)            | Local (Ollama)                  |
+|--------------|----------------------------------|---------------------------------|
+| **Provider** | OpenAI GPT‑5 family             | Ollama (llama3.2, llava, etc.) |
+| **Quality**  | ⭐⭐⭐⭐⭐ Best                      | ⭐⭐⭐ Good                       |
+| **Vision**   | ✅ Full support                  | ⚠️ Requires llava model        |
+| **Tool Calling** | ✅ Native                    | ⚠️ Model-dependent             |
+| **Privacy**  | ❌ Data sent to OpenAI           | ✅ 100% local                  |
+| **Offline**  | ❌ Requires internet             | ✅ Works offline               |
+| **Cost**     | 💰 API usage fees                | 🆓 Free                        |
 
 ### Cloud Mode (Default) – OpenAI GPT‑5
 
-Uses OpenAI's GPT‑5 models for maximum quality and full feature support.
+Uses OpenAI’s GPT‑5 models for the highest quality and best tool + vision support.
 
 ```bash
-python main.py                    # Uses GPT-5 by default
-python main.py --cloud            # Explicit cloud mode
-python main.py --model gpt-5.1    # Use a different GPT-5 family model
+# Default usage (GUI provider selection, GPT‑5 cloud by default)
+python main.py
+
+# Force cloud mode explicitly
+python main.py --cloud
+
+# Use a specific GPT‑5 family model
+python main.py --cloud --model gpt-5.1
 ```
 
 **Pros:**
-- ✅ Best quality and accuracy
-- ✅ Full vision support (screen analysis)
-- ✅ Native function calling for all tools
-- ✅ Fastest response times
+
+- ✅ Best quality and accuracy  
+- ✅ Full vision support (screen analysis)  
+- ✅ Native function calling for all tools  
+- ✅ Fastest responses  
 
 **Cons:**
-- ❌ Requires `OPENAI_API_KEY` in `.env`
-- ❌ Requires internet connection
-- ❌ API usage costs
 
-### Local Mode - Ollama
+- ❌ Requires `OPENAI_API_KEY` in `.env`  
+- ❌ Requires internet connection  
+- ❌ API usage costs  
 
-Uses Ollama to run LLMs locally on your machine for privacy and offline use.
+### Local Mode – Ollama
+
+Runs models locally on your machine using Ollama.
 
 ```bash
-python main.py --local            # Uses llama3.2 by default
-python main.py --local --model llava  # Use vision-capable model
-python main.py --local --model deepseek-r1:1.5b  # Fast model
+# Basic local mode (uses llama3.2 by default)
+python main.py --local
+
+# With vision support (llava)
+python main.py --local --model llava
+
+# Fast reasoning model
+python main.py --local --model deepseek-r1:1.5b
 ```
 
 **Pros:**
-- ✅ No API key required
-- ✅ Works completely offline
-- ✅ Data never leaves your machine
-- ✅ Free to use
+
+- ✅ No OpenAI key required  
+- ✅ Works completely offline  
+- ✅ Data never leaves your machine  
+- ✅ Free to use  
 
 **Cons:**
-- ⚠️ Vision support requires specific models (llava, bakllava)
-- ⚠️ Tool calling support varies by model
-- ⚠️ Slower than cloud on most hardware
+
+- ⚠️ Vision support requires specific models (`llava`, etc.)  
+- ⚠️ Tool calling behavior depends on the model  
+- ⚠️ Often slower and less capable than GPT‑5  
 
 ### Automatic Provider Selection
 
-The assistant can automatically select the provider based on environment variables:
+You can let SpectraVoice choose based on environment variables:
 
 ```bash
-# Set in your shell or .env file
+# In your shell or .env file
 export LLM_PROVIDER=cloud   # Always use Cloud (OpenAI)
 export LLM_PROVIDER=local   # Always use Local (Ollama)
 
-# Then just run:
-python main.py  # Will use the provider from LLM_PROVIDER
+# Then:
+python main.py
 ```
 
-**Selection Priority:**
-1. CLI flags (`--cloud`, `--local`, `--interactive`) - highest priority
+**Selection priority (from highest to lowest):**
+
+1. CLI flags: `--cloud`, `--local`, `--interactive`
 2. `LLM_PROVIDER` environment variable
-3. GUI pop-up selector (if available)
+3. GUI pop-up selector
 4. Terminal prompt fallback
-5. Default to Cloud mode
+5. Default to cloud mode
 
 ---
 
 ## GUI Provider Selection (Startup Window)
 
-When you run `python main.py` without any flags or environment variables, a **small GUI window** appears allowing you to choose between Cloud and Local LLM providers.
+When you run:
 
-### How It Works
-
+```bash
+python main.py
 ```
+
+with no flags and `LLM_PROVIDER` not set, SpectraVoice shows a small window:
+
+### How It Looks
+
+```text
 ┌─────────────────────────────────────┐
 │  🤖 SpectraVoice                    │
 │  Select your LLM Provider           │
@@ -183,7 +260,7 @@ When you run `python main.py` without any flags or environment variables, a **sm
 
 ### Skip the GUI
 
-Set the `LLM_PROVIDER` environment variable to bypass the GUI:
+To always use one provider:
 
 ```bash
 # Always use Cloud (no GUI)
@@ -194,352 +271,275 @@ python main.py
 export LLM_PROVIDER=local
 python main.py
 
-# Or inline:
+# Or inline
 LLM_PROVIDER=cloud python main.py
 LLM_PROVIDER=local python main.py
 ```
 
-### Headless/Non-Interactive Environments
+### Headless / Non-Interactive Environments
 
-If tkinter is unavailable (e.g., SSH sessions, Docker containers), the selector automatically falls back to a terminal prompt:
-
-```
-==================================================
-🤖 SpectraVoice – LLM Provider Selection
-==================================================
-
-Select your LLM provider:
-  [1] ☁️  Cloud (OpenAI GPT) - Requires internet & API key
-  [2] 🏠 Local (Ollama) - Runs on your machine
-
-Enter choice (1 or 2) [default: 1]: 
-```
-
-### GUI Requirements
-
-The GUI uses Python's built-in `tkinter`. If not available:
-
-**macOS:**
-```bash
-brew install python-tk
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install python3-tk
-```
+If tkinter is not available (e.g. SSH, Docker), SpectraVoice falls back to a simple terminal prompt.
 
 ---
 
-## Local LLM Setup (Ollama)
+## Local LLM Setup (Ollama) – Detailed
 
 ### Step 1: Install Ollama
 
 **macOS:**
+
 ```bash
 brew install ollama
 ```
 
 **Linux:**
+
 ```bash
 curl -fsSL https://ollama.ai/install.sh | sh
 ```
 
 **Windows:**
-Download from https://ollama.ai/download
 
-### Step 2: Start Ollama Server
+Download from `https://ollama.ai/download`.
+
+### Step 2: Start Ollama server
 
 ```bash
 ollama serve
 ```
 
-> **Note:** Keep this running in a separate terminal. The assistant will fail-fast with helpful instructions if Ollama is not running.
+Keep this running while you use SpectraVoice.
 
-### Step 3: Pull a Model
+### Step 3: Pull models
 
 ```bash
-# Use our helper script (recommended):
+# Helper script (from project root)
 ./scripts/setup_ollama.sh
 
-# Or manually pull models:
-ollama pull llama3.2        # General purpose (3.2B params)
-ollama pull llava           # Vision support (recommended for screen analysis)
-ollama pull deepseek-r1:1.5b  # Fast, reasoning-focused
-ollama pull mistral         # Good balance of speed/quality
+# Or pull manually:
+ollama pull llama3.2
+ollama pull llava
+ollama pull deepseek-r1:1.5b
+ollama pull mistral
 ```
 
-### Step 4: Run the Assistant
+### Step 4: Run SpectraVoice with local models
 
 ```bash
-# Basic local mode
+# Basic local
 python main.py --local
 
-# With vision support
+# Vision (screen-aware) with llava
 python main.py --local --model llava
 
-# With specific model
+# Faster model
 python main.py --local --model deepseek-r1:1.5b
 ```
 
-### Environment Variables for Local LLM
-
-```bash
-# Override default local model
-export LOCAL_LLM_MODEL="llama3.2"
-
-# Override Ollama API URL (for remote Ollama servers)
-export OLLAMA_HOST="http://localhost:11434"
-
-# Auto-select local mode
-export LLM_PROVIDER="local"
-```
-
-### Model Capabilities
-
-| Model | Vision | Tool Calling | Speed | Quality |
-|-------|--------|--------------|-------|---------|
-| `llama3.2` | ❌ | ✅ Native | Fast | Good |
-| `llama3.1` | ❌ | ✅ Native | Medium | Better |
-| `llava` | ✅ | ⚠️ Limited | Medium | Good |
-| `mistral` | ❌ | ✅ Native | Fast | Good |
-| `deepseek-r1:1.5b` | ❌ | ⚠️ Augmented | Very Fast | Basic |
-| `qwen2.5` | ❌ | ✅ Native | Medium | Good |
-
-> **Tool Calling Note:** Models without native tool support use "augmented prompting" - the assistant describes available tools in the prompt and parses JSON responses. This works but is less reliable than native tool calling.
-
-### Interactive Mode
-
-```bash
-python main.py --interactive
-```
-
-- Guides you through provider selection at startup
-- Lists available Ollama models
-- Helps configure settings
-- Useful for first-time setup
-
 ---
 
-## Usage
+## Usage Modes
 
-### Terminal Mode (Recommended)
+### Terminal Mode (recommended)
+
 ```bash
 python main.py
 ```
-- No visual window - prevents mirror effect
-- Full screen analysis capability
-- Lowest resource usage
+
+- No extra window, uses your terminal
+- Full screen analysis, minimal overhead
 
 ### GUI Mode
+
 ```bash
 python main.py --gui
 ```
-- Shows status window with listening indicator
-- Press 'q' or ESC to quit
 
-### Minimal Mode (Fastest)
+- Shows a status window
+- Press `q` or `ESC` to quit the GUI
+
+### Minimal Mode (fastest)
+
 ```bash
 python main.py --minimal
 ```
-- Fastest startup and response
-- Lower quality for speed
-- Best for low-end devices
+
+- Shorter responses and lighter models
+- Best when you care about speed
 
 ### Debug Mode
+
 ```bash
 python main.py --debug
 ```
-- Verbose logging with timestamps
-- Performance metrics after each interaction
-- Useful for troubleshooting
 
-### Custom Voice
+- Extra logs and timing
+- Helpful when something is not working
+
+### Custom voice and Whisper model
+
 ```bash
+# Change TTS voice
 python main.py --voice nova
-```
-Available voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` (default)
 
-### Custom Whisper Model
-```bash
+# Change Whisper model
 python main.py --whisper-model small
 ```
-Available models: `tiny`, `base` (default), `small`, `medium`, `large`
-- Larger models = better accuracy, slower processing
-- Smaller models = faster, less accurate
 
-### Combine Options
-```bash
-python main.py --debug --voice echo --whisper-model small
-```
+Available Whisper sizes: `tiny`, `base` (default), `small`, `medium`, `large`.
+
+---
 
 ## On-Screen Status Indicator
 
-The assistant displays a small, unobtrusive indicator at the screen edge showing its current state:
+SpectraVoice shows a small, simple indicator to show what it’s doing:
 
-- **📍 Listening** (green dot) - Ready for voice input
-- **📍 Thinking** (orange dot) - Processing your request
-- **📍 Live** - Assistant is running
+- **Listening** (green dot)
+- **Thinking** (processing)
+- **Speaking**
 
-### Indicator Features
-- Always-on-top positioning (visible over other apps)
-- Draggable - click and drag to reposition
-- Pulsing dot for visual feedback
-- Automatic hide on shutdown
+You can configure it:
 
-### Configuration
 ```bash
-# Disable the indicator
+# Disable the indicator entirely
 export ASSISTANT_INDICATOR_ENABLED=false
 
 # Change position (default: top-right)
-export ASSISTANT_INDICATOR_POSITION=bottom-left  # top-right, top-left, bottom-right, bottom-left
+export ASSISTANT_INDICATOR_POSITION=bottom-left
+# Options: top-right, top-left, bottom-right, bottom-left
 ```
 
-### Requirements
-The indicator uses `tkinter` which is typically bundled with Python. If not available:
+If tkinter is not installed, SpectraVoice can still run without the indicator.
 
-**macOS:**
-```bash
-brew install python-tk
-```
+---
 
-> Note: If tkinter is unavailable, the assistant works normally without the visual indicator.
+## How to Use (simple flow)
 
-## How to Use
+1. Open a terminal, `cd` into the project, and activate `.venv`.
+2. Run `python main.py` (or `python main.py --cloud` / `--local`).
+3. Wait for it to say it’s **ready**.
+4. Speak a command like:
+   - “Open Chrome”
+   - “Go to youtube.com”
+   - “Search for AI videos on YouTube”
+   - “Scroll down”
+5. When you’re done, press **Ctrl + C** in the terminal (or `q` in GUI mode) to exit.
 
-1. Run the assistant with your preferred mode
-2. Speak naturally - the assistant is always listening
-3. Ask about anything on your screen or general questions
-4. Press Ctrl+C (terminal) or 'q' (GUI) to quit
+---
 
-## Example Questions
+## Troubleshooting (quick)
 
-- "What's on my screen?"
-- "Help me with this application"
-- "What does this error message mean?"
-- "Can you read this text for me?"
-- "What should I click next?"
-- "What did I just ask you?" (memory test)
-- "Tell me more about that" (follow-up)
+**Microphone not working**
 
-## Performance Modes
+- Check macOS microphone permission.
+- Make sure the correct input device is selected in System Settings.
 
-| Mode | Startup | CPU | Memory | Best For |
-|------|---------|-----|--------|----------|
-| **Terminal** | 1.5s | Low | 80MB | Daily use |
-| **GUI** | 2.0s | Medium | 100MB | Visual feedback |
-| **Minimal** | 0.8s | Lowest | 50MB | Low-end devices |
+**No screen context / errors about screen recording**
 
-## Troubleshooting
+- Ensure Screen Recording permission is turned on for your terminal or IDE.
 
-### Microphone Issues
-- Ensure microphone permissions are enabled in System Preferences
-- Check that your microphone is set as the default input device
+**Mouse/keyboard not controlled**
 
-### Audio Output Issues
-- Check speaker/headphone connections
-- Verify system audio output settings
+- Ensure Accessibility permission is turned on for your terminal or IDE.
 
-### API Errors
-- Ensure your OpenAI API key is valid
-- Check that you have sufficient API credits
-- Verify internet connection
+**OpenAI errors**
 
-### High CPU Usage
-- Use `--minimal` mode for lower resource usage
-- Close other resource-intensive applications
+- Confirm `OPENAI_API_KEY` is set correctly in `.env`.
+- Check that your key has access to GPT‑5.
+- Ensure you have internet.
+
+**High CPU usage**
+
+- Try `--minimal` mode.
+- Close other heavy applications.
+
+---
 
 ## Project Structure
 
-```
+```text
 SpectraVoice/
-├── main.py                              # Entry point (run this)
-├── requirements.txt                     # Python dependencies (exact versions)
-├── .env                                 # API keys (create this)
-├── README.md                            # Documentation
+├── main.py                  # Entry point (run this)
+├── requirements.txt         # Python dependencies
+├── .env                     # API keys (you create this)
+├── README.md                # Documentation
 ├── scripts/
-│   └── setup_ollama.sh                 # Helper script for Ollama setup
+│   └── setup_ollama.sh      # Helper script for Ollama
 ├── tests/
-│   ├── test_function_calling.py        # Function calling tests
-│   └── test_llm_providers.py           # LLM provider tests (Phase 7)
+│   ├── test_function_calling.py
+│   └── test_llm_providers.py
 └── src/
     └── assistant_app/
-        ├── __init__.py                  # Package exports
+        ├── __init__.py              # Package exports
         ├── core/
-        │   ├── assistant.py             # Vision AI with Function Calling
-        │   └── conversation.py          # Conversation memory
-        ├── llm/                          # LLM Provider Module
-        │   ├── __init__.py              # Module exports
-        │   ├── base.py                  # Provider-agnostic interface
-        │   ├── types.py                 # LLMConfig, LLMMessage, LLMResponse
-        │   ├── factory.py               # Provider creation & selection
-        │   ├── openai_provider.py       # Cloud (OpenAI GPT) implementation
-        │   └── ollama_provider.py       # Local (Ollama) implementation
+        │   ├── assistant.py         # Core assistant logic
+        │   └── conversation.py      # Conversation memory
+        ├── llm/
+        │   ├── __init__.py
+        │   ├── base.py              # Provider base class
+        │   ├── types.py             # LLMConfig, message/response types
+        │   ├── factory.py           # Provider creation and selection
+        │   ├── openai_provider.py   # Cloud (OpenAI GPT‑5) provider
+        │   └── ollama_provider.py   # Local (Ollama) provider
         ├── io/
         │   ├── audio/
-        │   │   ├── tts.py               # Text-to-speech
-        │   │   └── voice_detector.py    # Smart voice detection
+        │   │   ├── tts.py           # Text-to-speech
+        │   │   └── voice_detector.py# Voice detection & barge‑in
         │   ├── vision/
-        │   │   └── screen_capture.py    # Screen capture service
-        │   └── indicator.py             # On-screen status indicator
+        │   │   └── screen_capture.py# Screen capture service
+        │   └── indicator.py         # On-screen status indicator
         ├── services/
-        │   └── spectravoice_assistant.py# Main SpectraVoice orchestration controller
+        │   └── spectravoice_assistant.py  # Main orchestrator
         ├── tools/
-        │   ├── web_search.py            # Tavily web search integration
-        │   ├── tool_executor.py         # Function calling tool executor
-        │   └── safety.py                # Safety validation for tools
+        │   ├── web_search.py        # Web search integration
+        │   ├── tool_executor.py     # Tool execution for actions
+        │   └── safety.py            # Safety checks for tools
         └── utils/
-            ├── logging_config.py        # Structured logging setup
-            ├── config.py                # Configuration management
-            └── error_handler.py         # Error handling utilities
+            ├── logging_config.py    # Logging setup
+            ├── config.py            # Config management
+            └── error_handler.py     # Error handling
 ```
+
+---
 
 ## Running Tests
 
 ```bash
-# Run all LLM provider tests
+# With Python directly
 python tests/test_llm_providers.py
-
-# Run function calling tests
 python tests/test_function_calling.py
 
-# Run with pytest (if installed)
+# If you have pytest installed
 pytest tests/ -v
 ```
-
-### Test Coverage
-
-| Test Suite | Coverage |
-|------------|----------|
-| `test_llm_providers.py` | Cloud config, Local config, Provider selection, Tool augmentation |
-| `test_function_calling.py` | Tool schemas, Safety validation, Command execution |
 
 ---
 
 ## CLI Reference
 
-### LLM Provider Options
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--cloud` | Use Cloud LLM (OpenAI GPT) | Off |
-| `--local` | Use Local LLM (Ollama) | Off |
-| `--interactive` | Terminal-based provider selection | Off |
-| `--gui-select` | Force GUI provider selector | ✓ (default) |
-| `--model` | LLM model name | gpt-5 / llama3.2 |
-| `--ollama-url` | Ollama API URL | http://localhost:11434 |
+### LLM Provider options
 
-> **Note:** If no flag is provided and `LLM_PROVIDER` env is not set, the GUI selector appears by default.
+| Flag            | Description                          | Default  |
+|----------------|--------------------------------------|----------|
+| `--cloud`      | Use Cloud LLM (OpenAI GPT‑5)         | Off      |
+| `--local`      | Use Local LLM (Ollama)               | Off      |
+| `--interactive`| Terminal-based provider selection    | Off      |
+| `--gui-select` | Force GUI provider selector          | On (default) |
+| `--model`      | LLM model name                       | gpt‑5 / llama3.2 |
+| `--ollama-url` | Ollama API URL                       | `http://localhost:11434` |
 
-### General Options
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--gui` | Show GUI status window | Off |
-| `--minimal` | Minimal mode (fastest) | Off |
-| `--debug` | Enable debug logging | Off |
-| `--voice` | TTS voice selection | shimmer |
-| `--whisper-model` | Whisper model size | base |
+### General options
+
+| Flag              | Description                  | Default  |
+|-------------------|------------------------------|----------|
+| `--gui`           | Show GUI status window       | Off      |
+| `--minimal`       | Minimal mode (fastest)       | Off      |
+| `--debug`         | Enable debug logging         | Off      |
+| `--voice`         | TTS voice selection          | shimmer  |
+| `--whisper-model` | Whisper model size           | base     |
+
+---
 
 ## License
 
-MIT License
+MIT License.
