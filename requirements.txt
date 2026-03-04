@@ -1,0 +1,37 @@
+# Core AI & LLM
+openai>=1.0.0
+tiktoken>=0.5.0
+httpx>=0.24.0
+
+# Speech Recognition & Audio
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14
+soundfile>=0.12.0
+openai-whisper @ git+https://github.com/openai/whisper.git
+
+# Vision & Screen Capture
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# macOS Automation
+PyAutoGUI>=0.9.54
+pyobjc-framework-Quartz>=9.0
+pyobjc-framework-Cocoa>=9.0
+rubicon-objc>=0.4.0
+
+# Web Search
+tavily-python>=0.3.0
+
+# Configuration & Environment
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Deep Learning (for Whisper)
+torch>=2.0.0
+
+# HTTP Client
+requests>=2.28.0

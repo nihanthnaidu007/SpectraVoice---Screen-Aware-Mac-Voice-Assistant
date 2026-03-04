@@ -1,0 +1,117 @@
+# SpectraVoice Configuration
+# ==========================
+# All settings can be overridden with environment variables using VA_ prefix
+# Example: VA_VOICE_TTS_VOICE=nova
+
+# Operation mode: terminal, gui, or minimal
+mode: terminal
+
+# Enable debug mode for verbose logging
+debug: false
+
+# Voice Settings
+voice:
+  # OpenAI TTS voice: alloy, echo, fable, onyx, nova, shimmer
+  tts_voice: shimmer
+  
+  # Whisper model for speech recognition: tiny, base, small, medium, large
+  whisper_model: base
+  
+  # Speech recognition language
+  language: en
+  
+  # Speech rate multiplier (0.5 = half speed, 2.0 = double speed)
+  speech_rate: 1.0
+
+# Screen Capture Settings
+screen:
+  # JPEG quality for screen capture (1-100)
+  quality: 80
+  
+  # Scale factor for captured images (0.1-1.0)
+  scale_factor: 0.8
+  
+  # Refresh interval in seconds
+  refresh_interval: 0.2
+  
+  # Cache duration in seconds
+  cache_duration: 1.0
+
+# LLM Provider Settings
+llm:
+  # Provider type: cloud (OpenAI) or local (Ollama)
+  provider: cloud
+  
+  # Cloud (OpenAI GPT‑5) settings
+  cloud_model: gpt-5
+  
+  # Local (Ollama) settings
+  ollama_url: http://localhost:11434
+  ollama_model: llama3.2
+  
+  # Generation settings
+  max_tokens: 800
+  temperature: 0.7
+  
+  # Timeout in seconds
+  timeout: 60
+  
+  # Feature flags
+  enable_vision: true
+  enable_tools: true
+
+# API Settings (legacy, use llm section instead)
+api:
+  # OpenAI model to use (deprecated, use llm.cloud_model)
+  openai_model: gpt-5
+  
+  # Maximum tokens for responses
+  max_tokens: 800
+  
+  # Temperature for response generation (0-2)
+  temperature: 0.7
+  
+  # Request timeout in seconds
+  timeout: 30
+  
+  # Maximum retry attempts for failed requests
+  max_retries: 3
+
+# Hotkey Settings (not yet implemented)
+hotkeys:
+  # Toggle mute
+  mute_toggle: cmd+shift+m
+  
+  # Push-to-talk key
+  push_to_talk: space
+  
+  # Pause/resume assistant
+  pause_resume: cmd+shift+p
+  
+  # Quit assistant
+  quit: cmd+shift+q
+
+# Logging Settings
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  
+  # Log file path
+  file: logs/assistant.log
+  
+  # Maximum log file size in MB
+  max_size_mb: 10
+  
+  # Number of backup log files to keep
+  backup_count: 5
+
+# Safety Settings
+safety:
+  # Dry run mode - log actions without executing
+  dry_run: false
+  
+  # Block dangerous terminal commands
+  block_dangerous_commands: true
+  
+  # Require confirmation for certain actions (not yet implemented)
+  require_confirmation: false
