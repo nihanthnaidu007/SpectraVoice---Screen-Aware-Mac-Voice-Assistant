@@ -542,4 +542,4 @@ pytest tests/ -v
 
 ## License
 
-MIT License.
+MIT License @ 2026 Nihanth Naidu
