@@ -266,6 +266,7 @@ def _check_hotkeys(config_manager: ConfigManager) -> Check:
         specs = {
             "push_to_talk": hotkeys.push_to_talk,
             "dictation_mode": hotkeys.dictation_mode,
+            "meeting_toggle": hotkeys.meeting_toggle,
             "mute_toggle": hotkeys.mute_toggle,
             "pause_resume": hotkeys.pause_resume,
             "quit": hotkeys.quit,
@@ -303,6 +304,61 @@ def _check_config(config_manager: ConfigManager) -> Check:
     return Check("Config file", probe)
 
 
+def _check_meeting(config_manager: ConfigManager) -> Check:
+    """Meeting recording readiness (W3): consent posture, mic TCC, summarizer consistency.
+
+    The kill-switch (``meeting.enabled``) gates everything — when it is off the
+    check is a WARN explaining how to opt in, never a FAIL (a disabled feature
+    is a valid configuration). When it is on, the same microphone TCC probe the
+    assistant depends on runs here (R3: mic permission attaches to the host
+    process, so a headless launch fails here instead of mid-meeting).
+    """
+
+    def probe() -> ProbeOutcome:
+        meeting = config_manager.config.meeting
+        if not meeting.enabled:
+            return ProbeOutcome(
+                CheckState.WARN,
+                "Meeting recording is disabled (meeting.enabled: false in config.yaml) — the "
+                "kill-switch is engaged: --meeting, the HUD item, and the hotkey all refuse to record",
+            )
+        notes: list[str] = []
+        failures: list[str] = []
+        warnings: list[str] = []
+        if meeting.summarizer == "cloud" and not meeting.cloud_consent:
+            failures.append("summarizer is 'cloud' but cloud_consent is false — summaries refuse to run")
+        elif meeting.summarizer == "cloud":
+            notes.append("summaries will use Cloud (OpenAI) — third-party speech leaves the device (consented)")
+        else:
+            notes.append("summaries will use local Ollama (nothing leaves the device)")
+
+        mic = _probe_microphone()
+        if mic.state is CheckState.FAIL:
+            failures.append(f"microphone unavailable: {mic.detail}")
+        elif mic.state is CheckState.WARN:
+            warnings.append(mic.detail)
+        else:
+            notes.append(mic.detail)
+
+        if failures:
+            return ProbeOutcome(CheckState.FAIL, "; ".join(failures + warnings))
+        if warnings:
+            return ProbeOutcome(CheckState.WARN, "; ".join(warnings + notes))
+        detail = "; ".join(notes)
+        return ProbeOutcome(
+            CheckState.PASS,
+            f"{detail} — recordings start only via --meeting, the HUD item, or the hotkey "
+            f"({config_manager.config.hotkeys.meeting_toggle}), and the recording state stays visible",
+        )
+
+    return Check(
+        "Meeting recording",
+        probe,
+        fix_it="Set meeting.enabled: true in config.yaml (kill-switch); recordings still start "
+        "per meeting via --meeting / the HUD item / the hotkey",
+    )
+
+
 def build_default_checks(config_manager: ConfigManager) -> list[Check]:
     """The standard doctor check list, in report order."""
     cfg = config_manager.config
@@ -317,6 +373,7 @@ def build_default_checks(config_manager: ConfigManager) -> list[Check]:
         _check_ollama(cfg),
         _check_tavily_key(),
         _check_hotkeys(config_manager),
+        _check_meeting(config_manager),
         _check_config(config_manager),
     ]
 

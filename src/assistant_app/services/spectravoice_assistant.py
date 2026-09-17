@@ -7,12 +7,13 @@ import signal
 import threading
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from speech_recognition import Microphone, Recognizer, UnknownValueError
 
 from assistant_app.core.assistant import Assistant
-from assistant_app.core.consent import PrivacyConsent
+from assistant_app.core.consent import PrivacyConsent, RecordingConsent
 from assistant_app.hud import create_menu_bar_hud
 from assistant_app.hud.state import Activity, HUDStateMachine, activity_from_status
 from assistant_app.io.audio.tts import TextToSpeech
@@ -21,6 +22,8 @@ from assistant_app.io.hotkeys import DictationHotkeyListener, parse_hotkey
 from assistant_app.io.indicator import start_indicator, stop_indicator, update_status
 from assistant_app.io.vision.screen_capture import ScreenCapture
 from assistant_app.services.dictation import DictationController
+from assistant_app.services.meeting import MeetingController, run_startup_cleanup
+from assistant_app.services.meeting_summary import build_summarizer
 from assistant_app.services.transcription import TranscriptionWorker
 from assistant_app.utils.config import ConfigManager, get_config_manager
 from assistant_app.utils.logging_config import get_logger
@@ -79,6 +82,12 @@ class AssistantHUDActions:
         d = self._assistant.dictation
         return d.activation if d is not None else "off"
 
+    def toggle_meeting(self) -> None:
+        self._assistant.toggle_meeting()
+
+    def pause_meeting(self) -> None:
+        self._assistant.toggle_meeting_pause()
+
     def open_settings(self) -> None:
         # settings_window is darwin-only (lazy import raises ImportError with
         # an explicit message off-darwin).
@@ -129,6 +138,7 @@ class SpectraVoiceAssistant:
         config_manager: ConfigManager | None = None,  # None = global instance
         dictation_enabled: bool | None = None,  # None = use config value
         dictation_activation: str | None = None,  # None = use config value
+        meeting_start: bool = False,  # --meeting: explicit per-meeting consent at launch
     ):
         # Config is the single source of runtime settings (config.yaml + env
         # overrides); explicit CLI-derived arguments passed in here win.
@@ -227,6 +237,24 @@ class SpectraVoiceAssistant:
                 on_status=self._on_dictation_status,
                 on_dictated=self._on_dictated_text,
             )
+
+        # === MEETING (W3) ===
+        # Consent-gated per-meeting recording (D2): the config kill-switch must
+        # allow it and every start is explicit (--meeting, HUD menu, or the
+        # meeting_toggle hotkey). Summaries ride the LLMProvider seam
+        # (local-first); clips never reach the screen-aware pipeline (R8 —
+        # the audio callback branches to the meeting FIRST).
+        self.meeting_consent = RecordingConsent(feature_enabled=cfg.meeting.enabled)
+        self.meeting: MeetingController | None = None
+        if cfg.meeting.enabled:
+            run_startup_cleanup(cfg.meeting)  # D4: TTL sweep of old meeting dirs
+            self.meeting = MeetingController(
+                cfg.meeting,
+                transcribe=self._meeting_recognize,
+                consent=self.meeting_consent,
+                on_status=self._on_meeting_status,
+                summarize=self._build_meeting_summarizer(cfg.meeting),
+            )
         
     def _on_dictated_text(self, text: str) -> None:
         """DictationController success callback (insert thread)."""
@@ -316,6 +344,16 @@ class SpectraVoiceAssistant:
         """
         cb_start = time.time()
         self.metrics.reset()
+        
+        # === MEETING ROUTING (W3, R8) ===
+        # While a meeting is recording, the clip belongs to the meeting — it
+        # never reaches dictation retention or the screen-aware pipeline.
+        # The gate is `recording` (not on_clip's return): a clip that overflows
+        # the meeting queue or loses consent is already persisted as a gap
+        # marker; returning it to the pipeline would leak meeting speech.
+        if self.meeting is not None and self.meeting.recording:
+            self.meeting.on_clip(audio, spoken_at=cb_start)
+            return
         
         # Dictation audio retention: default policy keeps clips in memory for
         # the session only (persist_audio=false → this call discards them).
@@ -475,7 +513,7 @@ class SpectraVoiceAssistant:
                 # This prevents the mic from picking up our own TTS and triggering barge-in
                 self.voice_detector.mark_tts_start(response)
                 
-                if self.tts_muted:
+                if self.tts_muted or self._meeting_tts_blocked():
                     self.logger.info("🔇 Muted — response not spoken")
                     self._update_status("Listening")
                     return
@@ -561,6 +599,12 @@ class SpectraVoiceAssistant:
         if self.dictation is not None:
             self.dictation.start()
             self._dictation_hotkey_listener = self._start_global_hotkeys()
+
+        # Start the meeting recording when explicitly requested at launch
+        # (--meeting IS the per-meeting consent; the kill-switch still applies
+        # inside the controller's start()).
+        if self.meeting is not None and self.meeting_start:
+            self.toggle_meeting()
         
         # Start on-screen status indicator (non-blocking)
         start_indicator("Listening")
@@ -584,6 +628,14 @@ class SpectraVoiceAssistant:
             else:
                 print("🎤 Continuous dictation: speak, pause ~1-2s, and the text is inserted")
             print(f"🔁 Cycle activation modes with the dictation_mode hotkey ({hotkeys_cfg.dictation_mode})")
+        if self.meeting is not None:
+            if self.meeting.recording:
+                print(f"🏛️ MEETING RECORDING — {self.meeting.status_line()}")
+            else:
+                print(
+                    "🏛️ Meeting mode ready — start with --meeting, the "
+                    f"'{self.config_manager.config.hotkeys.meeting_toggle}' hotkey, or the HUD menu"
+                )
         print("🛑 Press Ctrl+C to quit")
         print("=" * 50)
         
@@ -628,7 +680,10 @@ class SpectraVoiceAssistant:
         self.logger.info(f"🤖 {greeting}")
         try:
             self.voice_detector.mark_tts_start(greeting)
-            self.tts.speak(greeting)
+            if self._meeting_tts_blocked():
+                self.logger.info("🔇 Meeting recording active — greeting not spoken")
+            else:
+                self.tts.speak(greeting)
             self.voice_detector.mark_tts_complete()
         except Exception as e:
             self.logger.warning(f"⚠️ Could not speak greeting: {e}")
@@ -645,6 +700,7 @@ class SpectraVoiceAssistant:
             lambda: self._transcription_worker.stop() if self._transcription_worker else None,
             lambda: self._dictation_hotkey_listener.stop() if self._dictation_hotkey_listener else None,
             lambda: self.dictation.shutdown() if self.dictation else None,
+            lambda: self.meeting.shutdown() if self.meeting else None,
             self.screen_capture.stop,
             self.tts.cleanup,
         ]
@@ -674,6 +730,7 @@ class SpectraVoiceAssistant:
         for name, spec, callback in (
             ("mute", hotkeys.mute_toggle, self.toggle_mute),
             ("pause_resume", hotkeys.pause_resume, self.toggle_pause),
+            ("meeting_toggle", hotkeys.meeting_toggle, self.toggle_meeting),
             ("quit", hotkeys.quit, self.request_shutdown),
         ):
             keys = parse_hotkey(spec)
@@ -731,6 +788,79 @@ class SpectraVoiceAssistant:
             )
         else:
             self.hud_state.set_dictation(None)
+
+    # === MEETING (W3) ===
+
+    def _meeting_recognize(self, audio) -> str:
+        """Meeting Whisper path (injected into MeetingController): the meeting
+        language knob (R10) applied to THIS assistant's recognizer. Runs on
+        the meeting worker thread — never the assistant pipeline."""
+        cfg = self.config_manager.config.meeting
+        if self._recognizer is None:
+            raise RuntimeError("meeting transcription before audio setup")
+        return self._recognizer.recognize_whisper(
+            audio, model=self.whisper_model, language=cfg.language
+        )
+
+    def _build_meeting_summarizer(self, meeting_cfg) -> Callable[[list[dict]], tuple[str, dict]] | None:
+        """Local-first summarizer on the LLMProvider seam; a misconfigured
+        cloud consent degrades to no summarizer (the transcript is still
+        written) instead of blocking the meeting feature."""
+        try:
+            return build_summarizer(meeting_cfg)
+        except ValueError as exc:
+            self.logger.warning(f"⚠️ Meeting summaries disabled: {exc}")
+            return None
+
+    def _meeting_tts_blocked(self) -> bool:
+        """During a recorded meeting the assistant never speaks (locked W3
+        decision) — meeting participants must not hear assistant responses."""
+        return self.meeting is not None and self.meeting.recording
+
+    def _on_meeting_status(self, status: str) -> None:
+        """MeetingController status callback (meeting threads)."""
+        self.logger.info(f"🏛️ {status}")
+        self.sync_meeting_hud()
+
+    def sync_meeting_hud(self) -> None:
+        """Render W3 meeting state in the HUD from the controller's own
+        recording/paused properties — no string parsing (mirrors dictation)."""
+        m = self.meeting
+        if m is None or not m.recording:
+            self.hud_state.set_meeting(None)
+            if self.hud_state.snapshot().activity is Activity.MEETING:
+                self.hud_state.set_activity(Activity.LISTENING)
+            return
+        self.hud_state.set_meeting("paused" if m.paused else "recording")
+        self.hud_state.set_activity(Activity.MEETING)
+
+    def toggle_meeting(self) -> None:
+        """Explicit per-meeting start/stop (D2): --meeting, the HUD menu, and
+        the meeting_toggle hotkey all land here — the controller refuses
+        anything the consent gate does not allow."""
+        m = self.meeting
+        if m is None:
+            self.logger.warning("🚫 Meeting mode is disabled (meeting.enabled: false)")
+            return
+        if m.recording:
+            result = m.stop()
+            if result is not None:
+                print(
+                    f"🏛️ Meeting saved: {result['utterances']} utterance(s), "
+                    f"{result['gaps']} gap(s) → {result['meeting_dir']}"
+                )
+        elif m.start():
+            print("🏛️ Meeting recording started — everything stays on this device")
+
+    def toggle_meeting_pause(self) -> None:
+        """Pause/resume the running meeting; skipped speech becomes a gap."""
+        m = self.meeting
+        if m is None or not m.recording:
+            return
+        if m.paused:
+            m.resume()
+        else:
+            m.pause()
 
     def _run_hud_mode(self) -> None:
         """HUD mode: the menu-bar HUD owns the main thread (spec D1.1) —

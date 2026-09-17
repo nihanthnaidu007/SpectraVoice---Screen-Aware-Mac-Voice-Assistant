@@ -120,3 +120,113 @@ class PrivacyConsent:
     def resume(self) -> None:
         """Clear the runtime pause (does not grant consent)."""
         self._mutate(None, False)
+
+
+# Observers receive (feature_enabled, armed) after each effective-state change.
+RecordingConsentObserver = Callable[[bool, bool], None]
+
+
+class RecordingConsent:
+    """Thread-safe gate for meeting audio recording (W3, sibling of PrivacyConsent).
+
+    Two inputs compose, and BOTH default to OFF:
+
+    - **feature_enabled** — the config kill-switch (``meeting.enabled``). When
+      it is false, recording is impossible: the ``--meeting`` flag, the HUD
+      item, and the hotkey all refuse. This is the switch an organization or a
+      cautious user keeps off to make third-party capture unreachable.
+    - **armed** — the explicit per-meeting start. Not sticky, not config-only:
+      every recording requires a fresh, visible start action, and the armed
+      state is exactly what the visible recording UI reflects.
+
+    Recording may start only when feature_enabled AND armed. Observer
+    discipline mirrors PrivacyConsent: callbacks fire on real state change,
+    run outside the lock, and a broken observer can never corrupt the gate.
+    """
+
+    def __init__(self, feature_enabled: bool = False):
+        self._lock = threading.Lock()
+        self._feature_enabled = feature_enabled
+        self._armed = False
+        self._observers: list[RecordingConsentObserver] = []
+
+    @property
+    def recording_allowed(self) -> bool:
+        """True only when the kill-switch is on AND this meeting was explicitly started."""
+        with self._lock:
+            return self._feature_enabled and self._armed
+
+    @property
+    def feature_enabled(self) -> bool:
+        with self._lock:
+            return self._feature_enabled
+
+    @property
+    def armed(self) -> bool:
+        with self._lock:
+            return self._armed
+
+    def snapshot(self) -> tuple[bool, bool, bool]:
+        """Atomic (feature_enabled, armed, recording_allowed) read."""
+        with self._lock:
+            return self._feature_enabled, self._armed, self._feature_enabled and self._armed
+
+    def arm(self) -> bool:
+        """Explicit per-meeting start. Returns False (and changes nothing) when
+        the config kill-switch is engaged — the refusal IS the kill-switch."""
+        with self._lock:
+            if not self._feature_enabled:
+                return False
+            changed = not self._armed
+            self._armed = True
+            observers = tuple(self._observers) if changed else ()
+        for observer in observers:
+            try:
+                observer(self._feature_enabled, self._armed)
+            except Exception:
+                get_logger(__name__).exception("RecordingConsent observer raised")
+        return True
+
+    def disarm(self) -> None:
+        """End the per-meeting arming (recording stops being allowed)."""
+        self._mutate(armed=False)
+
+    def set_feature_enabled(self, enabled: bool) -> None:
+        """Update the kill-switch (config-derived; constructed ONCE from
+        meeting.enabled at startup — this setter exists for tests and a future
+        hot-apply wiring, not for bypassing config)."""
+        self._mutate(feature_enabled=enabled)
+
+    # === observer hook (same contract as PrivacyConsent) ===
+
+    def add_observer(self, observer: RecordingConsentObserver) -> None:
+        with self._lock:
+            self._observers.append(observer)
+
+    def remove_observer(self, observer: RecordingConsentObserver) -> None:
+        with self._lock:
+            try:
+                self._observers.remove(observer)
+            except ValueError:
+                pass  # already removed — idempotent
+
+    def _mutate(self, feature_enabled: bool | None = None, armed: bool | None = None) -> bool:
+        """Apply a mutation and notify observers on real change.
+
+        Returns whether the gate allows recording after the change. ``None``
+        means "leave as-is"; the new state is computed INSIDE the lock so
+        concurrent mutations never overwrite each other. Observers run outside
+        the lock and are failure-isolated (HUD callbacks, hotkeys, tests).
+        """
+        with self._lock:
+            new_e = self._feature_enabled if feature_enabled is None else feature_enabled
+            new_a = self._armed if armed is None else armed
+            changed = (self._feature_enabled, self._armed) != (new_e, new_a)
+            self._feature_enabled, self._armed = new_e, new_a
+            observers = tuple(self._observers) if changed else ()
+        for observer in observers:
+            try:
+                observer(new_e, new_a)
+            except Exception:
+                get_logger(__name__).exception("RecordingConsent observer raised")
+        return new_e and new_a

@@ -25,6 +25,14 @@ class HUDActions(Protocol):
         """Cycle the W1 dictation mode (push-to-talk <-> VAD) via config."""
         ...
 
+    def toggle_meeting(self) -> None:
+        """Explicit per-meeting start/stop (W3 D2) — refused without consent."""
+        ...
+
+    def pause_meeting(self) -> None:
+        """Pause/resume the running meeting (skipped speech becomes a gap)."""
+        ...
+
     def current_dictation_mode(self) -> str:
         """The active dictation mode, for the menu label."""
         ...

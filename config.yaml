@@ -112,6 +112,9 @@ hotkeys:
   # Quit assistant
   quit: cmd+shift+q
 
+  # Start/stop the meeting recording (requires meeting.enabled: true)
+  meeting_toggle: cmd+shift+e
+
 # Logging Settings
 logging:
   # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -233,6 +236,59 @@ dictation:
   # uploaded).
   persist_audio: false
   audio_dir: ""
+
+  # Retention: persisted clips older than this many hours are deleted at
+  # startup; 0 keeps them forever (same mechanism as meeting.retention_hours).
+  retention_hours: 0
+
+# Meeting Recording (W3)
+# Transparent, consent-gated meeting capture with local transcription and
+# local-first summaries. Double-gated: `enabled` is the config kill-switch,
+# AND every recording requires an explicit per-meeting start (--meeting flag,
+# the HUD menu item, or the meeting_toggle hotkey). While a meeting is live
+# the recording state stays visible (HUD red dot + menu header), the
+# assistant's TTS is muted, and ALL microphone audio is transcribed into the
+# meeting transcript instead of entering the screen-aware assistant flow.
+meeting:
+  # Kill-switch: false makes meeting recording impossible from every start
+  # path. Even when true, nothing records until you explicitly start a meeting.
+  enabled: false
+
+  # Whisper transcription language for meetings (spoken language name or code).
+  language: english
+
+  # Fidelity queue depth for meeting transcription. Deliberately much deeper
+  # than the dictation queue (depth 2, which evicts oldest on overflow): a
+  # meeting must never silently lose an utterance. If this queue still fills,
+  # a gap marker is written into the transcript instead — silent loss is
+  # impossible by construction.
+  queue_depth: 256
+
+  # Keep each utterance clip as a WAV file next to the transcript (local-only,
+  # never uploaded). Off by default: the transcript alone is ~1-2 kB/min.
+  persist_audio: false
+
+  # Local-only directory for meeting artifacts (transcript JSONL + summaries).
+  audio_dir: ""
+
+  # Meeting artifacts older than this many hours are deleted at startup;
+  # 0 keeps them forever. Applies per meeting directory (transcript, summary,
+  # and clips age together).
+  retention_hours: 0
+
+  # Summarizer: "local" (Ollama, default — third-party speech never leaves the
+  # device) or "cloud" (OpenAI). The cloud path ALSO requires the separate
+  # cloud_consent flag below; both must be set before any transcript fragment
+  # can be sent off-device.
+  summarizer: local
+
+  # Separate, explicit consent for cloud summarization of meeting transcripts.
+  # Off by default, and validation refuses summarizer: cloud without it.
+  cloud_consent: false
+
+  # Map-reduce summarization chunk size in characters — long meetings are
+  # summarized per chunk, then reduced into the final summary.
+  chunk_chars: 6000
 
 # Auto-Restart Supervisor (W2)
 # When enabled, `python main.py` runs the assistant as a supervised child and

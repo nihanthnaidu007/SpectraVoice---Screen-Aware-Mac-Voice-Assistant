@@ -110,8 +110,26 @@ class TestDefaultChecksOnLinux:
             "Ollama server",
             "Tavily API key",
             "Global hotkeys",
+            "Meeting recording",
             "Config file",
         ]
+
+    def test_meeting_check_warns_while_kill_switch_engaged(self):
+        config_manager = ConfigManager()  # meeting.enabled defaults to false
+        results = run_doctor(config_manager, checks=build_default_checks(config_manager))
+        meeting = next(r for r in results if r.name == "Meeting recording")
+        assert meeting.state is CheckState.WARN
+        assert "kill-switch" in meeting.detail
+
+    def test_meeting_check_fails_on_cloud_summarizer_without_consent(self, tmp_path):
+        (tmp_path / "config.yaml").write_text(
+            "meeting:\n  enabled: true\n  summarizer: cloud\n  cloud_consent: false\n"
+        )
+        config_manager = ConfigManager(config_path=tmp_path / "config.yaml")
+        results = run_doctor(config_manager, checks=build_default_checks(config_manager))
+        meeting = next(r for r in results if r.name == "Meeting recording")
+        assert meeting.state is CheckState.FAIL
+        assert "cloud_consent" in meeting.detail
 
     def test_openai_key_fail_only_for_cloud_provider(self, tmp_path, monkeypatch):
         (tmp_path / "config.yaml").write_text("llm:\n  provider: cloud\n")

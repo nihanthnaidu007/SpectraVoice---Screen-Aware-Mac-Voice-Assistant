@@ -5,8 +5,9 @@ indicator status strings, TTS state callbacks, transcription-worker activity,
 and W1 dictation) into one thread-safe snapshot:
 
 - **activity axis**: idle / listening / transcribing / thinking / speaking /
-  dictating (the spec's quartet plus the two states the existing signals
-  already report — `update_status("Thinking")` — and D1.3's dictation states).
+  dictating / meeting (the spec's quartet plus the two states the existing
+  signals already report — `update_status("Thinking")` — D1.3's dictation
+  states, and W3's meeting-recording state).
 - **privacy axis**: ON / PAUSED / OFF, derived from the PrivacyConsent gate.
 
 State flows IN via callback updates only (no polling loop); observers are
@@ -39,6 +40,7 @@ class Activity(str, Enum):
     THINKING = "thinking"  # LLM round-trip
     SPEAKING = "speaking"  # TTS synthesis or playback
     DICTATING = "dictating"  # W1 dictation armed/inserting
+    MEETING = "meeting"  # W3 recording a meeting (unmissable: red dot)
 
 
 class Privacy(str, Enum):
@@ -72,6 +74,7 @@ class HUDSnapshot:
     activity: Activity = Activity.IDLE
     privacy: Privacy = Privacy.OFF
     dictation: str | None = None  # None | "ptt-held" | "vad-active" | "inserting"
+    meeting: str | None = None  # None | "recording" | "paused" (W3 D2 visibility)
 
     @property
     def is_listening(self) -> bool:
@@ -87,6 +90,7 @@ ACTIVITY_GLYPHS: dict[Activity, str] = {
     Activity.THINKING: "💭",
     Activity.SPEAKING: "🔊",
     Activity.DICTATING: "✍️",
+    Activity.MEETING: "🔴",  # recording indicator — must be unmissable (D2)
 }
 
 PRIVACY_GLYPHS: dict[Privacy, str] = {
@@ -109,12 +113,26 @@ def menu_summary(snapshot: HUDSnapshot) -> str:
         Privacy.OFF: "screen sharing off (no consent)",
     }[snapshot.privacy]
     detail = f" ({snapshot.dictation.replace('-', ' ')})" if snapshot.dictation else ""
-    return f"{snapshot.activity.value}{detail} · {privacy_note}"
+    meeting_note = {
+        "recording": " · MEETING RECORDING",
+        "paused": " · meeting paused",
+    }.get(snapshot.meeting, "")
+    return f"{snapshot.activity.value}{detail}{meeting_note} · {privacy_note}"
 
 
 def listen_item_label(is_listening: bool) -> str:
     """Menu title for the start/stop listening toggle."""
     return "Stop Listening" if is_listening else "Start Listening"
+
+
+def meeting_item_label(meeting_state: str | None) -> str:
+    """Menu title for the meeting start/stop toggle (W3 D2 visibility)."""
+    return "Stop Meeting & Summarize" if meeting_state is not None else "Start Meeting Recording"
+
+
+def meeting_pause_item_label(meeting_state: str | None) -> str:
+    """Menu title for the meeting pause/resume toggle."""
+    return "Resume Meeting" if meeting_state == "paused" else "Pause Meeting"
 
 
 def pause_item_label(privacy: Privacy) -> str:
@@ -166,6 +184,10 @@ class HUDStateMachine:
         """Update the dictation sub-state (None when dictation is inactive)."""
         self._publish(dictation=state)
 
+    def set_meeting(self, state: str | None) -> None:
+        """Update the meeting sub-state (None when no meeting is active)."""
+        self._publish(meeting=state)
+
     # === observers ===
 
     def add_observer(self, observer: StateObserver) -> None:
@@ -195,11 +217,12 @@ class HUDStateMachine:
         activity: Activity | None = None,
         privacy: Privacy | None = None,
         dictation: str | None | _Unset = _UNSET,
+        meeting: str | None | _Unset = _UNSET,
     ) -> None:
         """Merge the given field updates, notify only when the snapshot changed.
 
-        ``None`` means "clear this axis" (legitimate for the dictation
-        sub-state); the ``_UNSET`` sentinel means "leave as-is".
+        ``None`` means "clear this axis" (legitimate for the dictation and
+        meeting sub-states); the ``_UNSET`` sentinel means "leave as-is".
         """
         with self._lock:
             current = self._snapshot
@@ -207,6 +230,7 @@ class HUDStateMachine:
                 activity=current.activity if activity is None else activity,
                 privacy=current.privacy if privacy is None else privacy,
                 dictation=current.dictation if isinstance(dictation, _Unset) else dictation,
+                meeting=current.meeting if isinstance(meeting, _Unset) else meeting,
             )
             changed = updated != current
             if changed:

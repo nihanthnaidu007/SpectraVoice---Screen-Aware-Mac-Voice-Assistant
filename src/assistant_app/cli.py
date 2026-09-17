@@ -116,6 +116,17 @@ LLM Provider Options:
         "dictation.activation",
     )
 
+    # Meeting transcription (W3) — the explicit per-meeting start (D2).
+    # Recording is default-OFF and requires the config kill-switch to allow
+    # it; this flag IS the explicit per-meeting consent at launch.
+    parser.add_argument(
+        "--meeting",
+        action="store_true",
+        help="Start recording a meeting at launch: every utterance is "
+        "transcribed to a local JSONL transcript and summarized on stop. "
+        "Requires meeting.enabled: true in config.yaml (kill-switch).",
+    )
+
     # Voice and model arguments
     parser.add_argument(
         "--voice",
@@ -347,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         config_manager=config_manager,
         dictation_enabled=args.dictation or cfg.dictation.enabled,
         dictation_activation=args.dictation_mode or cfg.dictation.activation,
+        meeting_start=args.meeting,
     )
     assistant.run()
     return 0
