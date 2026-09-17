@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, "src"))
@@ -34,6 +36,29 @@ class TestFlagParsing:
         assert args.debug is True
         assert args.minimal is True
         assert args.voice == "nova"
+
+
+class TestDictationFlags:
+    def test_dictation_defaults_off(self):
+        args = cli.parse_args([])
+        assert args.dictation is False
+        assert args.dictation_mode is None  # None = defer to config
+
+    def test_dictation_flag_is_set(self):
+        args = cli.parse_args(["--dictation"])
+        assert args.dictation is True
+
+    def test_dictation_mode_choices(self):
+        assert cli.parse_args(["--dictation-mode", "vad"]).dictation_mode == "vad"
+        assert cli.parse_args(["--dictation-mode", "push_to_talk"]).dictation_mode == "push_to_talk"
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--dictation-mode", "hold"])
+
+    def test_dictation_mode_works_without_dictation_flag(self):
+        # Setting just the mode still enables the feature via the assistant's
+        # "flag wins" precedence: mode implies intent.
+        args = cli.parse_args(["--dictation-mode", "vad"])
+        assert args.dictation_mode == "vad"
 
 
 class TestDoctorShortCircuit:

@@ -5,7 +5,7 @@ import os
 import signal
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from speech_recognition import Microphone, Recognizer, UnknownValueError
 
@@ -13,8 +13,10 @@ from assistant_app.core.assistant import Assistant
 from assistant_app.core.consent import PrivacyConsent
 from assistant_app.io.audio.tts import TextToSpeech
 from assistant_app.io.audio.voice_detector import SmartVoiceDetector
+from assistant_app.io.hotkeys import DictationHotkeyListener, parse_hotkey
 from assistant_app.io.indicator import start_indicator, stop_indicator, update_status
 from assistant_app.io.vision.screen_capture import ScreenCapture
+from assistant_app.services.dictation import DictationController
 from assistant_app.services.transcription import TranscriptionWorker
 from assistant_app.utils.config import ConfigManager, get_config_manager
 from assistant_app.utils.logging_config import get_logger
@@ -31,6 +33,16 @@ _GREETINGS = (
     "Hey! Ready when you are.",
     "Hi there! How can I assist you?",
 )
+
+# The active assistant's ToolExecutor, for components that must type at the
+# cursor through the same automation layer (with its safety-stop) as tools —
+# currently only dictation. Set in __init__, read by dictation's default typer.
+_active_tool_executor = None
+
+
+def get_active_tool_executor():
+    """ToolExecutor of the running assistant, or None (e.g. in unit tests)."""
+    return _active_tool_executor
 
 
 @dataclass
@@ -70,6 +82,8 @@ class SpectraVoiceAssistant:
         llm_provider = None,  # Pre-validated LLMProvider instance
         enable_barge_in: bool | None = None,  # None = use config value
         config_manager: ConfigManager | None = None,  # None = global instance
+        dictation_enabled: bool | None = None,  # None = use config value
+        dictation_activation: str | None = None,  # None = use config value
     ):
         # Config is the single source of runtime settings (config.yaml + env
         # overrides); explicit CLI-derived arguments passed in here win.
@@ -130,7 +144,35 @@ class SpectraVoiceAssistant:
         # Set up TTS callbacks for barge-in and completion tracking
         self.tts.set_on_interrupted(self._on_tts_interrupted)
         self.tts.set_on_complete(self._on_tts_complete)
+
+        # === DICTATION (W1) ===
+        # Local Whisper transcripts are routed here INSTEAD of the LLM whenever
+        # dictation is armed. Insertion reuses this assistant's ToolExecutor
+        # (type_text) so dry-run, audit logging, and the PyAutoGUI FAILSAFE
+        # safety-stop apply to dictation exactly as to any other automation.
+        global _active_tool_executor
+        _active_tool_executor = self.assistant.tool_executor
+        self.dictation_enabled = (
+            cfg.dictation.enabled if dictation_enabled is None else dictation_enabled
+        )
+        self._dictation_hotkey_listener: DictationHotkeyListener | None = None
+        self.dictation: DictationController | None = None
+        if self.dictation_enabled:
+            dict_cfg = cfg.dictation
+            if dictation_activation is not None and dictation_activation != dict_cfg.activation:
+                # CLI flag wins — copy, never mutate the shared config object
+                dict_cfg = replace(dict_cfg, activation=dictation_activation)
+            self.dictation = DictationController(
+                dict_cfg,
+                on_status=lambda status: self.logger.info(f"📝 {status}"),
+                on_dictated=self._on_dictated_text,
+            )
         
+    def _on_dictated_text(self, text: str) -> None:
+        """DictationController success callback (insert thread)."""
+        self.metrics.interaction_count += 1
+        self.logger.info(f"📝 Dictated: {text}")
+
     def _signal_handler(self, signum, frame) -> None:
         self.logger.info("🛑 Shutting down...")
         self.running = False
@@ -177,6 +219,11 @@ class SpectraVoiceAssistant:
         """
         cb_start = time.time()
         self.metrics.reset()
+        
+        # Dictation audio retention: default policy keeps clips in memory for
+        # the session only (persist_audio=false → this call discards them).
+        if self.dictation is not None and self.dictation.armed:
+            self.dictation.record_audio(audio, cb_start)
         
         if self.mic_config.inline_transcription:
             self._transcribe_and_handle(recognizer, audio, cb_start)
@@ -226,7 +273,17 @@ class SpectraVoiceAssistant:
         """
         try:
             total_start = spoken_at
-            
+
+            # === DICTATION ROUTING (W1) ===
+            # When the dictation session is armed, this utterance is typed at
+            # the cursor instead of running the screen-aware LLM flow. Checked
+            # before SmartVoiceDetector filtering: its min-word/noise rules
+            # would reject short legitimate dictation, and the dictation
+            # pipeline applies its own light hallucination guard.
+            if self.dictation is not None and self.dictation.armed:
+                self.dictation.handle_transcript(prompt)
+                return
+
             # === BARGE-IN CHECK ===
             # Check if TTS is playing BEFORE validating speech
             is_tts_playing = self.tts.is_playing
@@ -392,6 +449,12 @@ class SpectraVoiceAssistant:
         self.logger.info("👂 Starting voice recognition...")
         stop_listening = recognizer.listen_in_background(microphone, self._audio_callback)
         
+        # Start dictation (controller + optional global hotkeys) before the
+        # indicator so the status line reflects the dictation session.
+        if self.dictation is not None:
+            self.dictation.start()
+            self._dictation_hotkey_listener = self._start_dictation_hotkeys()
+        
         # Start on-screen status indicator (non-blocking)
         start_indicator("Listening")
         
@@ -404,6 +467,16 @@ class SpectraVoiceAssistant:
         print("🎤 Speak naturally - I'm always listening")
         if self.enable_barge_in:
             print("🗣️ Barge-in enabled - interrupt me anytime!")
+        if self.dictation is not None:
+            print(f"📝 Dictation ON — {self.dictation.status_line()}")
+            print("   Speech is transcribed locally and typed at your cursor; nothing leaves this machine")
+            print("   Audio is not kept after this session (set dictation.persist_audio: true in config.yaml to change)")
+            hotkeys_cfg = self.config_manager.config.hotkeys
+            if self.dictation.activation == "push_to_talk":
+                print(f"🎤 Push-to-talk: hold the '{hotkeys_cfg.push_to_talk}' key while speaking")
+            else:
+                print("🎤 Continuous dictation: speak, pause ~1-2s, and the text is inserted")
+            print(f"🔁 Cycle activation modes with the dictation_mode hotkey ({hotkeys_cfg.dictation_mode})")
         print("🛑 Press Ctrl+C to quit")
         print("=" * 50)
         
@@ -460,6 +533,8 @@ class SpectraVoiceAssistant:
         cleanups = [
             lambda: stop_listening(wait_for_stop=False),
             lambda: self._transcription_worker.stop() if self._transcription_worker else None,
+            lambda: self._dictation_hotkey_listener.stop() if self._dictation_hotkey_listener else None,
+            lambda: self.dictation.shutdown() if self.dictation else None,
             self.screen_capture.stop,
             self.tts.cleanup,
         ]
@@ -476,11 +551,31 @@ class SpectraVoiceAssistant:
                 pass
         self.logger.info("👋 SpectraVoice stopped")
 
+    def _start_dictation_hotkeys(self) -> DictationHotkeyListener | None:
+        """Wire push-to-talk / mode-toggle hotkeys; degrade gracefully to
+        flag-only control when pynput or permissions are unavailable."""
+        hotkeys = self.config_manager.config.hotkeys
+        ptt = parse_hotkey(hotkeys.push_to_talk)
+        mode = parse_hotkey(hotkeys.dictation_mode)
+        if not ptt:
+            self.logger.warning("⚠️ No valid push_to_talk hotkey configured — push-to-talk unavailable")
+            return None
+        listener = DictationHotkeyListener(self.dictation, ptt, mode)
+        listener_ok = listener.start()
+        return listener if listener_ok else None
+
     def _run_terminal_mode(self) -> None:
         """Run in terminal mode with periodic heartbeat."""
         last_heartbeat = time.time()
         while self.running:
             time.sleep(1)
+            # VAD dictation advances on this 1 Hz clock: buffered fragments
+            # become an insertion once the silence window closes.
+            if self.dictation is not None:
+                try:
+                    self.dictation.poll_vad()
+                except Exception as e:  # heartbeat must never kill the loop
+                    self.logger.error(f"❌ Dictation VAD poll failed: {e}")
             if time.time() - last_heartbeat >= 30:
                 stats = self._transcription_worker.stats if self._transcription_worker else None
                 extra = f", transcribed: {stats.completed}, dropped: {stats.dropped}" if stats else ""

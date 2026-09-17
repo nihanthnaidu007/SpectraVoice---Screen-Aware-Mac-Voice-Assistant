@@ -25,6 +25,10 @@ pyobjc-framework-AVFoundation>=9.0; sys_platform == "darwin"
 pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
 rubicon-objc>=0.4.0; sys_platform == "darwin"
 
+# Global hotkeys for dictation push-to-talk / mode toggle (W1). Import is
+# optional at runtime — the assistant degrades to flag-only control without it.
+pynput>=1.7.6
+
 # Web Search
 tavily-python>=0.3.0
 
