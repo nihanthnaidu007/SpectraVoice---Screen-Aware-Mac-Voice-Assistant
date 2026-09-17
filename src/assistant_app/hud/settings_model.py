@@ -89,7 +89,8 @@ def _type_label(annotation: Any) -> str:
     label = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", str(annotation))
     label = label.replace("typing.", "")
     if label.startswith("Optional[") and label.endswith("]"):
-        label = label[len("Optional[") : -1]
+        # "?" suffix marks optional fields: UI text "none" coerces to None.
+        label = label[len("Optional[") : -1] + "?"
     return label
 
 
@@ -152,7 +153,14 @@ def set_config_value(config: AssistantConfig, key: SettingKey, value: Any) -> No
 
 
 def coerce(raw: str, value_type: str) -> Any:
-    """Coerce a UI string to the field's type. Raises ValueError/TypeError."""
+    """Coerce a UI string to the field's type. Raises ValueError/TypeError.
+
+    A trailing "?" (optional field) allows the literal "none" -> None."""
+    optional = value_type.endswith("?")
+    if optional:
+        if raw.strip().lower() == "none":
+            return None
+        value_type = value_type[:-1]
     if value_type == "bool":
         low = raw.strip().lower()
         if low in {"1", "true", "yes", "on"}:

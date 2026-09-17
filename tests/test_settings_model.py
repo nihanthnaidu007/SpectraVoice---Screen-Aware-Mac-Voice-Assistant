@@ -204,3 +204,11 @@ def test_reload_is_functional_and_dispatches(manager):
     manager.on_reload(boom)
     assert manager.reload().screen.quality == 95  # still reloaded
     assert len(seen) == 2  # first observer still ran
+
+
+def test_coerce_optional_int_accepts_none(manager):
+    k = key("microphone", "input_device", value_type="int?")
+    assert coerce("none", "int?") is None
+    assert coerce("0", "int?") == 0
+    outcomes = apply_settings(manager, {k: "none"})
+    assert outcomes[0].accepted and outcomes[0].new_value is None
