@@ -19,12 +19,14 @@ probes or stub modules.
 Exit code: 0 when no check FAILs, 1 otherwise (WARN/SKIP never fail).
 """
 
+import importlib.util
 import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from assistant_app.io.hotkeys import parse_hotkey
 from assistant_app.utils.config import ConfigManager
 from assistant_app.utils.logging_config import get_logger
 
@@ -253,6 +255,43 @@ def _check_tavily_key() -> Check:
     )
 
 
+def _pynput_available() -> bool:
+    """Whether the global-hotkey dependency is installed (graceful probe)."""
+    return importlib.util.find_spec("pynput") is not None
+
+
+def _check_hotkeys(config_manager: ConfigManager) -> Check:
+    def probe() -> ProbeOutcome:
+        hotkeys = config_manager.config.hotkeys
+        specs = {
+            "push_to_talk": hotkeys.push_to_talk,
+            "dictation_mode": hotkeys.dictation_mode,
+            "mute_toggle": hotkeys.mute_toggle,
+            "pause_resume": hotkeys.pause_resume,
+            "quit": hotkeys.quit,
+        }
+        invalid = [name for name, spec in specs.items() if not parse_hotkey(spec)]
+        if not _pynput_available():
+            return ProbeOutcome(
+                CheckState.WARN,
+                "pynput is not installed — global hotkeys are disabled; use the HUD menu "
+                "and --dictation-mode (VAD dictation works without keys)",
+            )
+        if invalid:
+            return ProbeOutcome(
+                CheckState.WARN, f"invalid hotkey config, ignored: {', '.join(invalid)}"
+            )
+        return ProbeOutcome(
+            CheckState.PASS, f"All {len(specs)} global hotkeys parse cleanly (single pynput input path)"
+        )
+
+    return Check(
+        "Global hotkeys",
+        probe,
+        fix_it="pip install pynput; grant Accessibility permission (System Settings → Privacy & Security → Accessibility)",
+    )
+
+
 def _check_config(config_manager: ConfigManager) -> Check:
     def probe() -> ProbeOutcome:
         issues = config_manager.validate()
@@ -277,6 +316,7 @@ def build_default_checks(config_manager: ConfigManager) -> list[Check]:
         _check_openai_key(cfg),
         _check_ollama(cfg),
         _check_tavily_key(),
+        _check_hotkeys(config_manager),
         _check_config(config_manager),
     ]
 

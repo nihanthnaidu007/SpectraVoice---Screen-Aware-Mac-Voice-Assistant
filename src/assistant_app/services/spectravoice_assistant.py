@@ -1,8 +1,10 @@
 """SpectraVoice Controller - Main orchestration service."""
 
 import atexit
+import logging
 import os
 import signal
+import threading
 import time
 import warnings
 from dataclasses import dataclass, replace
@@ -11,6 +13,8 @@ from speech_recognition import Microphone, Recognizer, UnknownValueError
 
 from assistant_app.core.assistant import Assistant
 from assistant_app.core.consent import PrivacyConsent
+from assistant_app.hud import create_menu_bar_hud
+from assistant_app.hud.state import Activity, HUDStateMachine, activity_from_status
 from assistant_app.io.audio.tts import TextToSpeech
 from assistant_app.io.audio.voice_detector import SmartVoiceDetector
 from assistant_app.io.hotkeys import DictationHotkeyListener, parse_hotkey
@@ -43,6 +47,47 @@ _active_tool_executor = None
 def get_active_tool_executor():
     """ToolExecutor of the running assistant, or None (e.g. in unit tests)."""
     return _active_tool_executor
+
+
+class AssistantHUDActions:
+    """HUDActions implementation backed by the live assistant (W2 D1.3).
+
+    The AppKit HUD invokes these on the main thread; each maps to the
+    assistant's existing consent-gated behavior — the HUD controls nothing
+    the CLI does not already control, so gate semantics are unchanged.
+    """
+
+    def __init__(self, assistant: "SpectraVoiceAssistant"):
+        self._assistant = assistant
+
+    def toggle_listening(self) -> None:
+        a = self._assistant
+        if a._stop_listening_fn is None:
+            a.start_listening()
+        else:
+            a.stop_listening_now()
+
+    def toggle_pause(self) -> None:
+        self._assistant.toggle_pause()
+
+    def switch_dictation_mode(self) -> None:
+        if self._assistant.dictation is not None:
+            self._assistant.dictation.on_mode_toggle()
+            self._assistant.sync_dictation_hud()
+
+    def current_dictation_mode(self) -> str:
+        d = self._assistant.dictation
+        return d.activation if d is not None else "off"
+
+    def open_settings(self) -> None:
+        # settings_window is darwin-only (lazy import raises ImportError with
+        # an explicit message off-darwin).
+        from assistant_app.hud.settings_window import open_settings_window
+
+        open_settings_window(self._assistant.config_manager)
+
+    def quit(self) -> None:
+        self._assistant.request_shutdown()
 
 
 @dataclass
@@ -103,6 +148,11 @@ class SpectraVoiceAssistant:
         self._barge_min_confidence = cfg.barge_in.min_confidence  # Low enough to catch real speech mid-TTS
         self._barge_min_words = cfg.barge_in.min_words  # Single word like "stop" should interrupt
         self._barge_min_chars = cfg.barge_in.min_chars  # Even short commands like "no" count
+        self.tts_muted = False  # hotkey/HUD mute toggle (TTS output only)
+        # Hot-apply (W2 D2): the ONLY config keys the running process re-reads
+        # live. Registered on the ConfigManager change dispatcher shared with
+        # reload(); the taxonomy is settings_model.HOT_APPLY_KEYS (keep in sync).
+        self.config_manager.on_reload(self._on_config_changed)
         
         self.whisper_model = whisper_model or profile.whisper_model
         self.voice = voice or cfg.voice.tts_voice
@@ -133,6 +183,16 @@ class SpectraVoiceAssistant:
         )
         self.voice_detector = SmartVoiceDetector()
         self._transcription_worker: TranscriptionWorker | None = None
+
+        # === HUD (W2 D1): two-axis state machine fed by callbacks; the AppKit
+        # HUD (on macOS) renders it and owns the main thread.
+        self.hud_state = HUDStateMachine()
+        self.privacy_consent.add_observer(self.hud_state.set_privacy)
+        self._recognizer: Recognizer | None = None  # held for listen toggling
+        self._microphone: Microphone | None = None
+        self._stop_listening_fn = None  # listen_in_background cancel callable
+        self._hud = None  # MenuBarHUD on darwin; None degrades to CLI indicator
+
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         atexit.register(stop_indicator)
@@ -164,7 +224,7 @@ class SpectraVoiceAssistant:
                 dict_cfg = replace(dict_cfg, activation=dictation_activation)
             self.dictation = DictationController(
                 dict_cfg,
-                on_status=lambda status: self.logger.info(f"📝 {status}"),
+                on_status=self._on_dictation_status,
                 on_dictated=self._on_dictated_text,
             )
         
@@ -175,8 +235,17 @@ class SpectraVoiceAssistant:
 
     def _signal_handler(self, signum, frame) -> None:
         self.logger.info("🛑 Shutting down...")
+        self.request_shutdown()
+
+    def request_shutdown(self) -> None:
+        """Stop everything and end the HUD run loop (signal- or menu-initiated)."""
         self.running = False
         stop_indicator()
+        if self._hud is not None:
+            try:
+                self._hud.request_terminate()
+            except Exception:
+                self.logger.exception("HUD terminate failed — continuing teardown")
     
     def pause_screen_sharing(self) -> None:
         """Runtime privacy toggle: stop sending screen content to the LLM."""
@@ -191,12 +260,40 @@ class SpectraVoiceAssistant:
         else:
             self.logger.info("🔒 Pause cleared — screen sharing still off (no consent)")
     
+    def toggle_mute(self) -> None:
+        """Hotkey/HUD mute toggle — suppresses TTS output only; consent and
+        screen behavior are untouched."""
+        self.tts_muted = not self.tts_muted
+        self.logger.info(f"🔇 TTS {'muted' if self.tts_muted else 'unmuted'}")
+
+    def toggle_pause(self) -> None:
+        """Hotkey/HUD pause toggle — the same consent-gated pause/resume pair
+        every other consumer uses (the HUD reflects and controls, never bypasses)."""
+        if self.privacy_consent.paused:
+            self.resume_screen_sharing()
+        else:
+            self.pause_screen_sharing()
+
+    def _on_config_changed(self, config) -> None:
+        """ConfigManager change notification (reload + settings apply).
+
+        Hot-apply: the ONLY keys the running process genuinely re-reads live.
+        Everything else is restart-required — components hold constructed
+        references (taxonomy: settings_model.HOT_APPLY_KEYS)."""
+        b = config.barge_in
+        self.enable_barge_in = b.enabled
+        self._barge_min_confidence = b.min_confidence
+        self._barge_min_words = b.min_words
+        self._barge_min_chars = b.min_chars
+        logging.getLogger().setLevel(getattr(logging, config.logging.level.upper(), logging.INFO))
+        self.logger.info("⚙️ Config hot-applied: barge-in thresholds + log level")
+
     def _on_tts_interrupted(self) -> None:
         """Callback when TTS is interrupted by barge-in."""
         self._barge_in_count += 1
         self.logger.debug(f"📊 Barge-in count: {self._barge_in_count}")
         # Update indicator when interrupted
-        update_status("Listening")
+        self._update_status("Listening")
     
     def _on_tts_complete(self, was_interrupted: bool) -> None:
         """Callback when TTS finishes (either normally or interrupted)."""
@@ -204,7 +301,7 @@ class SpectraVoiceAssistant:
             # Mark TTS complete for echo filtering
             self.voice_detector.mark_tts_complete()
         # Update indicator back to listening
-        update_status("Listening")
+        self._update_status("Listening")
 
     def _audio_callback(self, recognizer, audio) -> None:
         """
@@ -253,6 +350,7 @@ class SpectraVoiceAssistant:
         caller, so the inline path and the TranscriptionWorker share one entry
         point without handling the transcript twice.
         """
+        self.hud_state.set_activity(Activity.TRANSCRIBING)  # HUD: Whisper phase (D1.3)
         trans_start = time.time()
         try:
             return recognizer.recognize_whisper(audio, model=self.whisper_model, language="english")
@@ -339,12 +437,12 @@ class SpectraVoiceAssistant:
             self.logger.info(f"🎤 User ({confidence:.0%}): {prompt}")
             
             # Update indicator to show we're processing
-            update_status("Thinking")
+            self._update_status("Thinking")
             
             image_data = self.screen_capture.get_encoded()
             if not image_data:
                 self.logger.error("❌ No screen data available")
-                update_status("Listening")
+                self._update_status("Listening")
                 return
             
             self.logger.info("👁️ Analyzing screen...")
@@ -371,12 +469,16 @@ class SpectraVoiceAssistant:
                 # Start speaking in background thread so we can continue listening
                 # The callback returns immediately, allowing new speech detection
                 # TTS completion/interruption is handled via callbacks
-                update_status("Speaking")
+                self._update_status("Speaking")
                 
                 # Record what we're about to say for echo detection
                 # This prevents the mic from picking up our own TTS and triggering barge-in
                 self.voice_detector.mark_tts_start(response)
                 
+                if self.tts_muted:
+                    self.logger.info("🔇 Muted — response not spoken")
+                    self._update_status("Listening")
+                    return
                 self.tts.speak_async(response)
                 
                 # NOTE: We return here immediately!
@@ -385,11 +487,11 @@ class SpectraVoiceAssistant:
                 # - Updating indicator back to "Listening"
             else:
                 self.logger.warning("❌ No response generated")
-                update_status("Listening")
+                self._update_status("Listening")
                 
         except Exception as e:
             self.logger.error(f"❌ Audio error: {e}")
-            update_status("Listening")
+            self._update_status("Listening")
 
     
     def _open_microphone(self, recognizer: Recognizer) -> Microphone:
@@ -434,6 +536,10 @@ class SpectraVoiceAssistant:
         
         microphone = self._open_microphone(recognizer)
         
+        # Create the menu-bar HUD (darwin-only; None elsewhere) before the
+        # listen loop so the icon reflects the initial listening state.
+        self._hud = create_menu_bar_hud(self.hud_state, AssistantHUDActions(self))
+        
         self.logger.info("📸 Starting screen capture...")
         self.screen_capture.start()
         
@@ -447,13 +553,14 @@ class SpectraVoiceAssistant:
             ).start()
         
         self.logger.info("👂 Starting voice recognition...")
-        stop_listening = recognizer.listen_in_background(microphone, self._audio_callback)
+        self._recognizer, self._microphone = recognizer, microphone
+        self.start_listening()
         
         # Start dictation (controller + optional global hotkeys) before the
         # indicator so the status line reflects the dictation session.
         if self.dictation is not None:
             self.dictation.start()
-            self._dictation_hotkey_listener = self._start_dictation_hotkeys()
+            self._dictation_hotkey_listener = self._start_global_hotkeys()
         
         # Start on-screen status indicator (non-blocking)
         start_indicator("Listening")
@@ -483,12 +590,14 @@ class SpectraVoiceAssistant:
         self._speak_greeting()
         
         try:
-            if self.mode == "gui":
+            if self._hud is not None:
+                self._run_hud_mode()
+            elif self.mode == "gui":
                 self._run_gui_mode()
             else:
                 self._run_terminal_mode()
         finally:
-            self._cleanup(stop_listening)
+            self._cleanup()
     
     def _speak_greeting(self) -> None:
         """Analyze screen silently first, then speak greeting."""
@@ -524,14 +633,15 @@ class SpectraVoiceAssistant:
         except Exception as e:
             self.logger.warning(f"⚠️ Could not speak greeting: {e}")
     
-    def _cleanup(self, stop_listening) -> None:
+    def _cleanup(self) -> None:
         self.logger.info("🔄 Cleaning up...")
         
         # Stop the status indicator
         stop_indicator()
         
+        self.stop_listening_now()
+        
         cleanups = [
-            lambda: stop_listening(wait_for_stop=False),
             lambda: self._transcription_worker.stop() if self._transcription_worker else None,
             lambda: self._dictation_hotkey_listener.stop() if self._dictation_hotkey_listener else None,
             lambda: self.dictation.shutdown() if self.dictation else None,
@@ -551,18 +661,102 @@ class SpectraVoiceAssistant:
                 pass
         self.logger.info("👋 SpectraVoice stopped")
 
-    def _start_dictation_hotkeys(self) -> DictationHotkeyListener | None:
-        """Wire push-to-talk / mode-toggle hotkeys; degrade gracefully to
-        flag-only control when pynput or permissions are unavailable."""
+    def _start_global_hotkeys(self) -> DictationHotkeyListener | None:
+        """Wire ALL configured global hotkeys through the single pynput input
+        path (W2 D3, locked: pynput retained over a Quartz CGEventTap
+        migration — one input library, W1's graceful degradation carries
+        over; see io/hotkeys.py for the rationale). Degrades to HUD/CLI-only
+        control when pynput or permissions are unavailable."""
         hotkeys = self.config_manager.config.hotkeys
         ptt = parse_hotkey(hotkeys.push_to_talk)
         mode = parse_hotkey(hotkeys.dictation_mode)
-        if not ptt:
-            self.logger.warning("⚠️ No valid push_to_talk hotkey configured — push-to-talk unavailable")
+        commands: dict[str, tuple[frozenset[str], callable]] = {}
+        for name, spec, callback in (
+            ("mute", hotkeys.mute_toggle, self.toggle_mute),
+            ("pause_resume", hotkeys.pause_resume, self.toggle_pause),
+            ("quit", hotkeys.quit, self.request_shutdown),
+        ):
+            keys = parse_hotkey(spec)
+            if keys:
+                commands[name] = (keys, callback)
+        if not ptt and not commands:
+            self.logger.warning("⚠️ No valid global hotkeys configured — use the HUD menu / CLI flags")
             return None
-        listener = DictationHotkeyListener(self.dictation, ptt, mode)
-        listener_ok = listener.start()
-        return listener if listener_ok else None
+        listener = DictationHotkeyListener(self.dictation, ptt, mode, commands)
+        return listener if listener.start() else None
+
+    def start_listening(self) -> None:
+        """(Re)start the background listen loop (HUD menu toggle entry)."""
+        if self._stop_listening_fn is not None:
+            return
+        if self._recognizer is None or self._microphone is None:
+            self.logger.warning("⚠️ Listen toggle before audio setup — ignoring")
+            return
+        self._stop_listening_fn = self._recognizer.listen_in_background(
+            self._microphone, self._audio_callback
+        )
+        self.hud_state.set_activity(Activity.LISTENING)
+        self.logger.info("👂 Listening started")
+
+    def stop_listening_now(self) -> None:
+        """Stop the background listen loop; safe to call repeatedly."""
+        fn, self._stop_listening_fn = self._stop_listening_fn, None
+        if fn is None:
+            return
+        fn(wait_for_stop=False)
+        self.hud_state.set_activity(Activity.IDLE)
+        self.logger.info("🛑 Listening stopped")
+
+    def _update_status(self, status: str) -> None:
+        """Single status funnel: legacy CLI indicator + HUD activity axis."""
+        update_status(status)
+        self.hud_state.set_activity(activity_from_status(status))
+
+    def _on_dictation_status(self, status: str) -> None:
+        """DictationController status callback (audio/insert threads)."""
+        self.logger.info(f"📝 {status}")
+        self.sync_dictation_hud()
+
+    def sync_dictation_hud(self) -> None:
+        """Render W1 dictation state in the HUD (spec D1.3) from the
+        controller's own armed/inserting properties — no string parsing."""
+        d = self.dictation
+        if d is None:
+            self.hud_state.set_dictation(None)
+        elif d.inserting:
+            self.hud_state.set_dictation("inserting")
+        elif d.armed:
+            self.hud_state.set_dictation(
+                "ptt-held" if d.activation == "push_to_talk" else "vad-active"
+            )
+        else:
+            self.hud_state.set_dictation(None)
+
+    def _run_hud_mode(self) -> None:
+        """HUD mode: the menu-bar HUD owns the main thread (spec D1.1) —
+        NSApplication.run() blocks until request_terminate(). The 1 Hz clock
+        (VAD poll + heartbeat) moves off the main thread to keep the UI live."""
+        threading.Thread(
+            target=self._background_clock_loop, name="sv-clock", daemon=True
+        ).start()
+        self._hud.run()
+
+    def _background_clock_loop(self) -> None:
+        """1 Hz heartbeat: VAD dictation clock + activity log (the terminal
+        keep-alive loop's duties, relocated for HUD main-thread ownership)."""
+        last_heartbeat = time.time()
+        while self.running:
+            time.sleep(1)
+            if self.dictation is not None:
+                try:
+                    self.dictation.poll_vad()
+                except Exception as e:  # clock must never die
+                    self.logger.error(f"❌ Dictation VAD poll failed: {e}")
+            if time.time() - last_heartbeat >= 30:
+                stats = self._transcription_worker.stats if self._transcription_worker else None
+                extra = f", transcribed: {stats.completed}, dropped: {stats.dropped}" if stats else ""
+                self.logger.info(f"💓 SpectraVoice active... (interactions: {self.metrics.interaction_count}{extra})")
+                last_heartbeat = time.time()
 
     def _run_terminal_mode(self) -> None:
         """Run in terminal mode with periodic heartbeat."""

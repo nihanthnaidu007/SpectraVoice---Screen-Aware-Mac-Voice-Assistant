@@ -109,6 +109,7 @@ class TestDefaultChecksOnLinux:
             "OpenAI API key",
             "Ollama server",
             "Tavily API key",
+            "Global hotkeys",
             "Config file",
         ]
 
