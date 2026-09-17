@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectravoice"
+description = "SpectraVoice – Screen-Aware Mac Voice Assistant: local Whisper + vision LLM + macOS automation"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Kalisetti Nihanth Naidu", email = "nihanthnaidu007@gmail.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+# Single dependency truth: requirements.txt (the same file `pip install -r`
+# uses), so packaging and manual installs can never drift apart.
+dynamic = ["version", "dependencies"]
+
+[project.scripts]
+spectravoice = "assistant_app.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "assistant_app.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]

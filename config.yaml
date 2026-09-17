@@ -181,3 +181,16 @@ tts:
   
   # Use tts-1-hd for higher quality synthesis
   hd_quality: true
+
+# Auto-Restart Supervisor (W2)
+# When enabled, `python main.py` runs the assistant as a supervised child and
+# restarts it after an unhandled crash. All child output — including the Wave 0
+# crash-capture tracebacks — is appended to the log file below for diagnosis.
+# After max_restarts crashes within window_seconds the supervisor gives up
+# instead of looping forever. Run once without supervision: python main.py --no-supervisor
+supervisor:
+  enabled: true
+  max_restarts: 5
+  window_seconds: 60
+  backoff_seconds: 1
+  backoff_max_seconds: 30

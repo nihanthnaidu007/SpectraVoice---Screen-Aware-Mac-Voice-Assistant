@@ -40,7 +40,26 @@ Control your computer with voice:
 
 ## Installation & Setup (step by step)
 
-Follow these steps in order. After this, you should be able to run SpectraVoice and talk to it.
+### Quick start — 3 steps
+
+```bash
+# 1. Get the code
+git clone https://github.com/nihanthnaidu007/SpectraVoice---Screen-Aware-Mac-Voice-Assistant.git
+cd SpectraVoice---Screen-Aware-Mac-Voice-Assistant
+
+# 2. One-command bootstrap (venv, system deps, pip install, .env, doctor check)
+./scripts/bootstrap.sh
+
+# 3. Run it
+python main.py
+```
+
+`python main.py --doctor` re-checks everything any time: microphone, screen
+recording, and accessibility permissions (with System Settings fix-it links),
+API keys, Ollama reachability, and config health. Full details:
+[docs/SETUP.md](docs/SETUP.md).
+
+The manual steps below describe what the bootstrap automates.
 
 ### 1. Get the code
 
@@ -567,6 +586,8 @@ pytest tests/ -v
 | `--gui`           | Show GUI status window       | Off      |
 | `--minimal`       | Minimal mode (fastest)       | Off      |
 | `--debug`         | Enable debug logging         | Off      |
+| `--doctor`        | Headless diagnostics: permission probes, API keys, config health; prints fix-it links and exits | Off |
+| `--no-supervisor` | Run once without the crash-restart supervisor (even if `supervisor.enabled` in config.yaml) | Off |
 | `--voice`         | TTS voice selection          | `voice.tts_voice` from config (shimmer) |
 | `--whisper-model` | Whisper model size           | base     |
 

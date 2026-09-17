@@ -238,3 +238,56 @@ microphone:
         reloaded = ConfigManager(config_path=str(out)).config
         assert reloaded.voice.whisper_model == "small"
         assert reloaded.microphone.input_device == 4
+
+
+class TestSupervisorSection:
+    """supervisor.* — the Wave 2 restart policy, read through the config system."""
+
+    def test_code_defaults_are_conservative(self):
+        cfg = ConfigManager().config
+        assert cfg.supervisor.enabled is False
+        assert cfg.supervisor.max_restarts == 5
+        assert cfg.supervisor.window_seconds == 60.0
+        assert cfg.supervisor.backoff_seconds == 1.0
+        assert cfg.supervisor.backoff_max_seconds == 30.0
+
+    def test_shipped_config_enables_supervision(self):
+        # The repo's config.yaml opts in even though the code default is off.
+        shipped = os.path.join(project_root, "config.yaml")
+        cfg = ConfigManager(config_path=shipped).config
+        assert cfg.supervisor.enabled is True
+        assert cfg.supervisor.max_restarts == 5
+
+    def test_yaml_values_are_loaded(self, tmp_path):
+        write_config(tmp_path, """
+supervisor:
+  enabled: true
+  max_restarts: 3
+  window_seconds: 30
+  backoff_seconds: 2
+  backoff_max_seconds: 10
+""")
+        cfg = ConfigManager().config
+        assert cfg.supervisor.enabled is True
+        assert cfg.supervisor.max_restarts == 3
+        assert cfg.supervisor.window_seconds == 30.0
+        assert cfg.supervisor.backoff_seconds == 2.0
+        assert cfg.supervisor.backoff_max_seconds == 10.0
+
+    def test_env_overrides_beat_yaml(self, tmp_path, monkeypatch):
+        write_config(tmp_path, "supervisor:\n  enabled: true\n  max_restarts: 5\n")
+        monkeypatch.setenv("VA_SUPERVISOR_ENABLED", "false")
+        monkeypatch.setenv("VA_SUPERVISOR_MAX_RESTARTS", "2")
+        cfg = ConfigManager().config
+        assert cfg.supervisor.enabled is False
+        assert cfg.supervisor.max_restarts == 2
+
+    def test_serialization_roundtrips(self, tmp_path):
+        write_config(tmp_path, "supervisor:\n  max_restarts: 7\n")
+        manager = ConfigManager()
+        assert manager.to_dict()["supervisor"]["max_restarts"] == 7
+
+    def test_negative_restarts_are_rejected(self, tmp_path):
+        write_config(tmp_path, "supervisor:\n  max_restarts: -1\n")
+        issues = ConfigManager().validate()
+        assert any("max_restarts" in issue for issue in issues)

@@ -14,11 +14,16 @@ opencv-python>=4.8.0
 Pillow>=10.0.0
 numpy>=1.24.0
 
-# macOS Automation
+# macOS Automation (mac-only: pyobjc builds require macOS; markers keep the
+# package pip-installable on Linux CI and containers)
 PyAutoGUI>=0.9.54
-pyobjc-framework-Quartz>=9.0
-pyobjc-framework-Cocoa>=9.0
-rubicon-objc>=0.4.0
+pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
+# Permission status queries for `--doctor` (AVCaptureDevice mic status,
+# AXIsProcessTrusted accessibility status)
+pyobjc-framework-AVFoundation>=9.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
+rubicon-objc>=0.4.0; sys_platform == "darwin"
 
 # Web Search
 tavily-python>=0.3.0
