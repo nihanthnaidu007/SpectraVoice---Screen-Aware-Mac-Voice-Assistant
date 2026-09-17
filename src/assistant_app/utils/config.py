@@ -129,6 +129,22 @@ class TTSConfig:
 
 
 @dataclass
+class SupervisorConfig:
+    """Auto-restart supervision settings.
+
+    When enabled, the CLI runs the assistant as a supervised child process and
+    restarts it after an unhandled crash. max_restarts crashes within
+    window_seconds give up instead of looping forever; backoff grows from
+    backoff_seconds up to backoff_max_seconds between restarts.
+    """
+    enabled: bool = False
+    max_restarts: int = 5
+    window_seconds: float = 60.0
+    backoff_seconds: float = 1.0
+    backoff_max_seconds: float = 30.0
+
+
+@dataclass
 class AssistantConfig:
     """Main configuration container."""
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -141,6 +157,7 @@ class AssistantConfig:
     barge_in: BargeInConfig = field(default_factory=BargeInConfig)
     microphone: MicrophoneConfig = field(default_factory=MicrophoneConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
     modes: dict[str, ModeProfile] = field(default_factory=dict)
     mode: str = "terminal"
     debug: bool = False
@@ -261,6 +278,10 @@ class ConfigManager:
             f"{self.ENV_PREFIX}MICROPHONE_INPUT_DEVICE": ("microphone", "input_device"),
             f"{self.ENV_PREFIX}MICROPHONE_ENERGY_THRESHOLD": ("microphone", "energy_threshold"),
             f"{self.ENV_PREFIX}TTS_OUTPUT_DEVICE": ("tts", "output_device"),
+
+            # Supervisor (auto-restart)
+            f"{self.ENV_PREFIX}SUPERVISOR_ENABLED": ("supervisor", "enabled"),
+            f"{self.ENV_PREFIX}SUPERVISOR_MAX_RESTARTS": ("supervisor", "max_restarts"),
             
             # Mode
             f"{self.ENV_PREFIX}MODE": ("mode", None),
@@ -344,6 +365,7 @@ class ConfigManager:
             barge_in=BargeInConfig(**section('barge_in', BargeInConfig)),
             microphone=MicrophoneConfig(**section('microphone', MicrophoneConfig)),
             tts=TTSConfig(**section('tts', TTSConfig)),
+            supervisor=SupervisorConfig(**section('supervisor', SupervisorConfig)),
             modes=modes,
             mode=config_dict.get('mode', 'terminal'),
             debug=config_dict.get('debug', False),
@@ -452,6 +474,16 @@ class ConfigManager:
         # TTS validation
         if cfg.tts.output_device is not None and cfg.tts.output_device < 0:
             issues.append(f"TTS output_device must be a non-negative index or null, got: {cfg.tts.output_device}")
+
+        # Supervisor validation
+        if cfg.supervisor.max_restarts < 0:
+            issues.append(f"Supervisor max_restarts must be >= 0, got: {cfg.supervisor.max_restarts}")
+        if cfg.supervisor.window_seconds <= 0:
+            issues.append(f"Supervisor window_seconds must be > 0, got: {cfg.supervisor.window_seconds}")
+        if cfg.supervisor.backoff_seconds < 0:
+            issues.append(f"Supervisor backoff_seconds must be >= 0, got: {cfg.supervisor.backoff_seconds}")
+        if cfg.supervisor.backoff_max_seconds < 0:
+            issues.append(f"Supervisor backoff_max_seconds must be >= 0, got: {cfg.supervisor.backoff_max_seconds}")
         
         # Mode validation
         valid_modes = {'terminal', 'gui', 'minimal'}
@@ -519,6 +551,13 @@ class ConfigManager:
             'tts': {
                 'output_device': cfg.tts.output_device,
                 'hd_quality': cfg.tts.hd_quality,
+            },
+            'supervisor': {
+                'enabled': cfg.supervisor.enabled,
+                'max_restarts': cfg.supervisor.max_restarts,
+                'window_seconds': cfg.supervisor.window_seconds,
+                'backoff_seconds': cfg.supervisor.backoff_seconds,
+                'backoff_max_seconds': cfg.supervisor.backoff_max_seconds,
             },
         }
     
