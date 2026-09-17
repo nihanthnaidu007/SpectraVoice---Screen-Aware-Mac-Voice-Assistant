@@ -31,6 +31,7 @@ SECTION_ORDER = (
     "api",
     "hotkeys",
     "dictation",
+    "meeting",
     "logging",
     "safety",
     "barge_in",

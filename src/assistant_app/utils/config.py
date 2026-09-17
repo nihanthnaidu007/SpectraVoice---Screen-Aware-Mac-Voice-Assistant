@@ -64,6 +64,8 @@ class HotkeyConfig:
     quit: str = "cmd+shift+q"
     # Tap to cycle dictation activation (push_to_talk <-> vad)
     dictation_mode: str = "cmd+shift+d"
+    # Start/stop the (explicitly started) meeting recording
+    meeting_toggle: str = "cmd+shift+e"
 
 
 @dataclass
@@ -111,6 +113,55 @@ class DictationConfig:
     persist_audio: bool = False
     # Where persisted clips go (local disk only — never uploaded)
     audio_dir: str = ""
+    # Retention (W3): persisted clips older than this many hours are deleted at
+    # startup; 0 keeps them forever. Shares the W3 retention mechanism with
+    # meeting artifacts (one mechanism, two consumers).
+    retention_hours: float = 0.0
+
+
+@dataclass
+class MeetingConfig:
+    """Meeting recording settings (W3): transparent, consent-gated capture + local summaries.
+
+    Default-OFF in both layers: ``enabled`` is the config kill-switch, and even
+    when it is on, a recording starts ONLY via an explicit per-meeting action
+    (the ``--meeting`` flag, the HUD item, or the hotkey) — no stealth capture,
+    ever, and the recording state stays visible while capture is live. Meeting
+    is a flag-gated feature section (the dictation precedent), not a fourth
+    top-level ``mode``.
+
+    Summaries are local-first: the cloud (OpenAI) summarizer exists in code but
+    requires BOTH ``summarizer: "cloud"`` AND the separately-consented
+    ``cloud_consent`` flag (off by default) — third-party speech never leaves
+    the machine unless the user makes that active, explicit choice.
+    """
+
+    # Kill-switch: when false, meeting recording is impossible (every start
+    # path refuses). When true, recordings still need the per-meeting start.
+    enabled: bool = False
+    # Whisper ``language`` parameter for meeting transcription (R10): meetings
+    # are where multilingual content realistically shows up, so this is a knob
+    # instead of dictation's hardcoded "english".
+    language: str = "english"
+    # Fidelity transcription queue depth (not the dictation depth of 2, which
+    # evicts the oldest utterance under load — silent transcript loss). Any
+    # residual drop at this depth persists a gap marker in the transcript.
+    queue_depth: int = 256
+    # Keep per-utterance WAV clips alongside the transcript (local-only).
+    persist_audio: bool = False
+    # Local-only meeting directory; "" resolves to logs/meetings
+    audio_dir: str = ""
+    # Retention: meeting artifacts older than this many hours are deleted at
+    # startup; 0 keeps them forever (the user decides; nothing is destroyed
+    # silently by default).
+    retention_hours: float = 0.0
+    # Summarizer: "local" (Ollama, default) or "cloud" (OpenAI). The cloud path
+    # additionally requires ``cloud_consent`` — two independent switches.
+    summarizer: str = "local"
+    # Separate, explicit consent for sending third-party speech to the cloud.
+    cloud_consent: bool = False
+    # Map-reduce chunk size in characters (per-chunk prompt input budget).
+    chunk_chars: int = 6000
 
 
 @dataclass
@@ -209,6 +260,7 @@ class AssistantConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
     dictation: DictationConfig = field(default_factory=DictationConfig)
+    meeting: MeetingConfig = field(default_factory=MeetingConfig)
     modes: dict[str, ModeProfile] = field(default_factory=dict)
     mode: str = "terminal"
     debug: bool = False
@@ -280,6 +332,14 @@ class ConfigManager:
         f"{ENV_PREFIX}DICTATION_ENABLED": ("dictation", "enabled"),
         f"{ENV_PREFIX}DICTATION_ACTIVATION": ("dictation", "activation"),
         f"{ENV_PREFIX}DICTATION_PERSIST_AUDIO": ("dictation", "persist_audio"),
+        f"{ENV_PREFIX}DICTATION_RETENTION_HOURS": ("dictation", "retention_hours"),
+
+        # Meeting recording (W3) — kill-switch + posture; a recording still
+        # requires the explicit per-meeting start on top of these.
+        f"{ENV_PREFIX}MEETING_ENABLED": ("meeting", "enabled"),
+        f"{ENV_PREFIX}MEETING_LANGUAGE": ("meeting", "language"),
+        f"{ENV_PREFIX}MEETING_SUMMARIZER": ("meeting", "summarizer"),
+        f"{ENV_PREFIX}MEETING_RETENTION_HOURS": ("meeting", "retention_hours"),
         
         # Mode
         f"{ENV_PREFIX}MODE": ("mode", None),
@@ -426,6 +486,7 @@ class ConfigManager:
             tts=TTSConfig(**section('tts', TTSConfig)),
             supervisor=SupervisorConfig(**section('supervisor', SupervisorConfig)),
             dictation=DictationConfig(**section('dictation', DictationConfig)),
+            meeting=MeetingConfig(**section('meeting', MeetingConfig)),
             modes=modes,
             mode=config_dict.get('mode', 'terminal'),
             debug=config_dict.get('debug', False),
@@ -573,6 +634,26 @@ class ConfigManager:
                 issues.append(f"Invalid dictation.app_styles['{app_name}']: {app_style}. Valid: standard, minimal")
         if cfg.dictation.vad_silence_timeout <= 0:
             issues.append(f"Dictation vad_silence_timeout must be > 0, got: {cfg.dictation.vad_silence_timeout}")
+        if cfg.dictation.retention_hours < 0:
+            issues.append(f"Dictation retention_hours must be >= 0 (0 = keep forever), got: {cfg.dictation.retention_hours}")
+
+        # Meeting validation (W3)
+        if not cfg.meeting.language.strip():
+            issues.append("Meeting language must be a non-empty Whisper language name or code")
+        if cfg.meeting.queue_depth < 1:
+            issues.append(f"Meeting queue_depth must be >= 1, got: {cfg.meeting.queue_depth}")
+        if cfg.meeting.retention_hours < 0:
+            issues.append(f"Meeting retention_hours must be >= 0 (0 = keep forever), got: {cfg.meeting.retention_hours}")
+        if cfg.meeting.summarizer not in {'local', 'cloud'}:
+            issues.append(f"Invalid meeting.summarizer: {cfg.meeting.summarizer}. Valid: local, cloud")
+        if cfg.meeting.summarizer == 'cloud' and not cfg.meeting.cloud_consent:
+            issues.append(
+                "Meeting summarizer is 'cloud' but meeting.cloud_consent is false — sending "
+                "third-party speech to the cloud requires the explicit consent flag "
+                "(or set summarizer back to 'local')"
+            )
+        if cfg.meeting.chunk_chars < 200:
+            issues.append(f"Meeting chunk_chars must be >= 200, got: {cfg.meeting.chunk_chars}")
         
         # TTS validation
         if cfg.tts.output_device is not None and cfg.tts.output_device < 0:
@@ -637,6 +718,7 @@ class ConfigManager:
                 'pause_resume': cfg.hotkeys.pause_resume,
                 'quit': cfg.hotkeys.quit,
                 'dictation_mode': cfg.hotkeys.dictation_mode,
+                'meeting_toggle': cfg.hotkeys.meeting_toggle,
             },
             'logging': {
                 'level': cfg.logging.level,
@@ -687,6 +769,18 @@ class ConfigManager:
                 'insert_enter': cfg.dictation.insert_enter,
                 'persist_audio': cfg.dictation.persist_audio,
                 'audio_dir': cfg.dictation.audio_dir,
+                'retention_hours': cfg.dictation.retention_hours,
+            },
+            'meeting': {
+                'enabled': cfg.meeting.enabled,
+                'language': cfg.meeting.language,
+                'queue_depth': cfg.meeting.queue_depth,
+                'persist_audio': cfg.meeting.persist_audio,
+                'audio_dir': cfg.meeting.audio_dir,
+                'retention_hours': cfg.meeting.retention_hours,
+                'summarizer': cfg.meeting.summarizer,
+                'cloud_consent': cfg.meeting.cloud_consent,
+                'chunk_chars': cfg.meeting.chunk_chars,
             },
             'modes': {
                 name: {
