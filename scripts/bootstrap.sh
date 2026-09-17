@@ -82,7 +82,13 @@ fi
 
 # 4. Python dependencies (single source of truth: requirements.txt via pyproject)
 echo "🐍 Installing Python dependencies (this can take a while — torch is large)..."
-pip install -e .
+if ! pip install -e .; then
+    echo "❌ Python dependency installation failed."
+    echo "    Most common cause on Linux: PyAudio builds from source and needs"
+    echo "    PortAudio headers:  sudo apt-get install -y portaudio19-dev python3-dev"
+    echo "    then re-run this script. (On macOS, PortAudio is installed via brew above.)"
+    exit 1
+fi
 
 # 5. Seed .env from the example if it does not exist
 if [ ! -f ".env" ]; then
