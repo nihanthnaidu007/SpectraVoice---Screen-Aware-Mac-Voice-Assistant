@@ -4,31 +4,21 @@ Utils Package
 Utility modules for SpectraVoice.
 """
 
-from .logging_config import setup_logging, get_logger
-from .config import get_config, get_config_manager, init_config, AssistantConfig
-from .error_handler import (
-    get_error_handler,
-    retry_with_backoff,
-    ErrorCategory,
-    ErrorSeverity,
-    ErrorInfo,
-    safe_execute
-)
+from .config import AssistantConfig, get_config, get_config_manager, init_config
+from .error_handler import ErrorCategory, ErrorInfo, ErrorSeverity, get_error_handler, retry_with_backoff, safe_execute
+from .logging_config import get_logger, setup_logging
 
 __all__ = [
-    # Logging
-    "setup_logging",
-    "get_logger",
-    # Configuration
+    "AssistantConfig",
+    "ErrorCategory",
+    "ErrorInfo",
+    "ErrorSeverity",
     "get_config",
     "get_config_manager",
-    "init_config",
-    "AssistantConfig",
-    # Error Handling
     "get_error_handler",
+    "get_logger",
+    "init_config",
     "retry_with_backoff",
-    "ErrorCategory",
-    "ErrorSeverity",
-    "ErrorInfo",
     "safe_execute",
+    "setup_logging",
 ]
