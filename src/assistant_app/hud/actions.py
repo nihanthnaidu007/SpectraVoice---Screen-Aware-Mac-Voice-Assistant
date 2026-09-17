@@ -41,6 +41,10 @@ class HUDActions(Protocol):
         """Open the native settings window (W2 D2)."""
         ...
 
+    def open_history(self) -> None:
+        """Open the history / privacy dashboard window (W4 D2)."""
+        ...
+
     def quit(self) -> None:
         """Full shutdown: stop workers, persist state, terminate the app."""
         ...
