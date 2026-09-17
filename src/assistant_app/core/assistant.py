@@ -5,24 +5,21 @@ Supports both Cloud (OpenAI) and Local (Ollama) LLM providers.
 
 import json
 
-from .conversation import ConversationMemory
-from assistant_app.utils.logging_config import get_logger
-from assistant_app.utils.error_handler import (
-    retry_with_backoff,
-    get_error_handler
-)
-from assistant_app.tools.web_search import WebSearch
-from assistant_app.tools.tool_executor import ToolExecutor, SafetyConfig, TOOL_SCHEMAS
+from assistant_app.core.consent import PrivacyConsent
 from assistant_app.llm import (
-    LLMProvider,
     LLMConfig,
-    LLMMessage,
-    LLMResponse,
     LLMError,
-    ProviderType,
+    LLMMessage,
+    LLMProvider,
+    LLMResponse,
     create_provider,
 )
+from assistant_app.tools.tool_executor import TOOL_SCHEMAS, SafetyConfig, ToolExecutor
+from assistant_app.tools.web_search import WebSearch
+from assistant_app.utils.error_handler import get_error_handler, retry_with_backoff
+from assistant_app.utils.logging_config import get_logger
 
+from .conversation import ConversationMemory
 
 SYSTEM_PROMPT = """You are a fast, helpful voice assistant that can see the user's screen, control their computer, and search the web.
 
@@ -130,6 +127,7 @@ class Assistant:
         safety_config: SafetyConfig | None = None,
         llm_config: LLMConfig | None = None,
         provider: LLMProvider | None = None,
+        privacy_consent: PrivacyConsent | None = None,
     ):
         self.max_tokens = max_tokens
         self.memory = ConversationMemory(max_messages=20)
@@ -137,6 +135,8 @@ class Assistant:
         self.web_search = WebSearch() if enable_web_search else None
         self.enable_tools = enable_tools
         self.tool_executor = ToolExecutor(safety_config) if enable_tools else None
+        # Privacy gate: screen content never leaves the machine without consent.
+        self.privacy_consent = privacy_consent or PrivacyConsent()
         
         # Initialize LLM provider
         if provider:
@@ -161,6 +161,16 @@ class Assistant:
     
     def process(self, prompt: str, image_data: bytes) -> str | None:
         """Process user prompt with vision and function calling."""
+        # Privacy gate — checked before anything is sent: without consent (or
+        # while paused) the screenshot must not reach the provider. Answer
+        # without vision instead.
+        if not self.privacy_consent.screen_upload_allowed:
+            self.logger.info(
+                "🔒 Screen sharing is off/paused — answering without vision "
+                "(screenshot NOT sent to the LLM provider)"
+            )
+            return self.process_text_only(prompt)
+        
         if not prompt or not image_data:
             return None
             
@@ -402,6 +412,30 @@ class Assistant:
         if self.tool_executor:
             self.tool_executor.safety.dry_run = enabled
             self.logger.info(f"🔒 Dry run mode: {'enabled' if enabled else 'disabled'}")
+    
+    def set_screen_consent(self, enabled: bool) -> None:
+        """Grant or revoke consent for uploading screen content to the LLM provider."""
+        if enabled:
+            self.privacy_consent.grant_consent()
+        else:
+            self.privacy_consent.revoke_consent()
+        self.logger.info(
+            f"🔒 Screen sharing consent: {'granted' if enabled else 'revoked'}"
+        )
+    
+    def pause_screen_sharing(self) -> None:
+        """Runtime privacy toggle: stop sending screen content until resumed."""
+        self.privacy_consent.pause()
+        self.logger.info("🔒 Screen sharing paused — queries run without vision")
+    
+    def resume_screen_sharing(self) -> None:
+        """Clear the runtime pause (only effective if consent is granted)."""
+        self.privacy_consent.resume()
+        allowed = self.privacy_consent.screen_upload_allowed
+        self.logger.info(
+            "🔓 Screen sharing resumed" if allowed
+            else "🔒 Pause cleared — screen sharing still off (no consent)"
+        )
     
     def get_tool_execution_log(self) -> list[dict]:
         """Get the tool execution history."""

@@ -6,21 +6,18 @@ import signal
 import time
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from speech_recognition import Microphone, Recognizer, UnknownValueError
 
-from assistant_app.utils.logging_config import get_logger
-from assistant_app.io.vision.screen_capture import ScreenCapture
-from assistant_app.io.audio.voice_detector import SmartVoiceDetector
-from assistant_app.io.audio.tts import TextToSpeech
-from assistant_app.io.indicator import start_indicator, update_status, stop_indicator
 from assistant_app.core.assistant import Assistant
+from assistant_app.core.consent import PrivacyConsent
+from assistant_app.io.audio.tts import TextToSpeech
+from assistant_app.io.audio.voice_detector import SmartVoiceDetector
+from assistant_app.io.indicator import start_indicator, stop_indicator, update_status
+from assistant_app.io.vision.screen_capture import ScreenCapture
+from assistant_app.utils.logging_config import get_logger
 
 # GUI mode imports (lazy loaded)
-if TYPE_CHECKING:
-    import cv2
-    import numpy as np
 
 os.environ.setdefault('PYTHONWARNINGS', 'ignore')
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -90,11 +87,15 @@ class SpectraVoiceAssistant:
         
         self.screen_capture = ScreenCapture(quality=quality, scale_factor=scale)
         
+        # Privacy: screen content leaves the machine only with explicit consent
+        # (SPECTRAVOICE_SCREEN_CONSENT, default OFF) and while not paused.
+        self.privacy_consent = PrivacyConsent.from_env()
+        
         # Initialize assistant with provider or config
         if llm_provider is not None:
-            self.assistant = Assistant(max_tokens=max_tokens, provider=llm_provider)
+            self.assistant = Assistant(max_tokens=max_tokens, provider=llm_provider, privacy_consent=self.privacy_consent)
         else:
-            self.assistant = Assistant(max_tokens=max_tokens, llm_config=llm_config)
+            self.assistant = Assistant(max_tokens=max_tokens, llm_config=llm_config, privacy_consent=self.privacy_consent)
         
         self.tts = TextToSpeech(voice=voice)
         self.voice_detector = SmartVoiceDetector()
@@ -114,6 +115,19 @@ class SpectraVoiceAssistant:
         self.logger.info("🛑 Shutting down...")
         self.running = False
         stop_indicator()
+    
+    def pause_screen_sharing(self) -> None:
+        """Runtime privacy toggle: stop sending screen content to the LLM."""
+        self.privacy_consent.pause()
+        self.logger.info("🔒 Screen sharing paused — queries run without vision")
+    
+    def resume_screen_sharing(self) -> None:
+        """Clear the runtime pause (only effective if consent is granted)."""
+        self.privacy_consent.resume()
+        if self.privacy_consent.screen_upload_allowed:
+            self.logger.info("🔓 Screen sharing resumed")
+        else:
+            self.logger.info("🔒 Pause cleared — screen sharing still off (no consent)")
     
     def _on_tts_interrupted(self) -> None:
         """Callback when TTS is interrupted by barge-in."""
@@ -291,7 +305,11 @@ class SpectraVoiceAssistant:
         start_indicator("Listening")
         
         self.logger.info("✅ READY! SpectraVoice is listening...")
-        print("👁️ I can see your screen and help with anything")
+        if self.privacy_consent.screen_upload_allowed:
+            print("👁️ Screen sharing is ON — screenshots are sent to your LLM provider with each query")
+        else:
+            print("🔒 Screen sharing is OFF — I will answer without seeing your screen")
+            print("   (opt in by setting SPECTRAVOICE_SCREEN_CONSENT=1 in .env)")
         print("🎤 Speak naturally - I'm always listening")
         if self.enable_barge_in:
             print("🗣️ Barge-in enabled - interrupt me anytime!")
@@ -372,9 +390,10 @@ class SpectraVoiceAssistant:
     
     def _run_gui_mode(self) -> None:
         """Run in GUI mode with visual status window."""
+        import math
+
         import cv2
         import numpy as np
-        import math
         
         status_window = np.zeros((250, 500, 3), dtype=np.uint8)
         
