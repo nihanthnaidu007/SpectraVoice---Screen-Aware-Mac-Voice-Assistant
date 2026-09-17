@@ -91,18 +91,25 @@ LLM Provider Options:
         help="Ollama API URL (default: http://localhost:11434)"
     )
     
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config file (default: config.yaml in the repo root)"
+    )
+    
     # Mode arguments
     parser.add_argument("--gui", action="store_true", help="Show GUI status window")
     parser.add_argument("--minimal", action="store_true", help="Run in minimal mode (fastest)")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose logging")
     
     # Voice and model arguments
     parser.add_argument(
         "--voice", 
         type=str, 
-        default="shimmer",
+        default=None,  # None means use config.yaml voice.tts_voice
         choices=TTS_VOICES,
-        help=f"TTS voice selection (default: shimmer). Options: {', '.join(TTS_VOICES)}"
+        help=f"TTS voice selection (default: config.yaml). Options: {', '.join(TTS_VOICES)}"
     )
     parser.add_argument(
         "--whisper-model",
@@ -115,15 +122,16 @@ LLM Provider Options:
     return parser.parse_args()
 
 
-def get_llm_config(args):
+def get_llm_config(args, cfg):
     """
-    Build LLM configuration from command-line arguments or environment.
+    Build LLM configuration from command-line arguments, environment, or config.
     
     Priority:
     1. Explicit CLI flags (--cloud, --local, --interactive, --gui-select)
     2. LLM_PROVIDER environment variable
-    3. GUI selector (default for interactive sessions)
-    4. Default to cloud mode (for non-interactive)
+    3. --model override (cloud vs local inferred from model name)
+    4. config.yaml `llm.provider` (cloud or local; `auto` falls through)
+    5. GUI selector (default for interactive sessions)
     """
     from assistant_app.llm import LLMConfig
     from assistant_app.llm.factory import (
@@ -165,6 +173,13 @@ def get_llm_config(args):
         else:
             # Assume it's a local model
             return LLMConfig.for_local(model=args.model, base_url=args.ollama_url)
+    
+    # No CLI/env choice — config.yaml `llm.provider` decides.
+    # "auto" keeps the legacy behavior: GUI selector with terminal fallback.
+    if cfg.llm.provider == "local":
+        return LLMConfig.for_local(model=cfg.llm.ollama_model, base_url=cfg.llm.ollama_url)
+    if cfg.llm.provider == "cloud":
+        return LLMConfig.for_cloud(model=cfg.llm.cloud_model)
     
     # Default behavior: Show GUI selector (with terminal fallback)
     # This is the new default when running `python main.py` without flags
@@ -234,20 +249,36 @@ def main():
     """Main entry point."""
     args = parse_args()
     
+    # Load config (config.yaml + VA_* env overrides) before logging setup so the
+    # `logging:` section configures the rotating file handler.
+    from assistant_app.utils.config import init_config
+    
+    config_manager = init_config(args.config)
+    cfg = config_manager.config
+    
     # Setup logging first (before any imports that might log), then install
     # crash capture so uncaught exceptions (including in background threads)
     # leave a traceback in the log file.
     from assistant_app.utils.logging_config import get_logger, install_crash_handlers, setup_logging
-    setup_logging(debug=args.debug)
+    setup_logging(
+        debug=args.debug or cfg.debug,
+        log_file=cfg.logging.file,
+        max_bytes=cfg.logging.max_size_mb * 1024 * 1024,
+        backup_count=cfg.logging.backup_count,
+    )
     install_crash_handlers()
     logger = get_logger(__name__)
     
-    if args.debug:
+    # Surface config problems without blocking startup — defaults apply per key.
+    for issue in config_manager.validate():
+        logger.warning(f"⚠️ Config issue: {issue}")
+    
+    if args.debug or cfg.debug:
         logger.info("🐛 Debug mode enabled - verbose logging active")
     
     # Get LLM configuration
     try:
-        llm_config = get_llm_config(args)
+        llm_config = get_llm_config(args, cfg)
     except Exception as e:
         logger.error(f"❌ Failed to configure LLM: {e}")
         print(f"\n❌ Configuration Error: {e}")
@@ -257,23 +288,24 @@ def main():
     # Validate provider is available (fail-fast)
     provider, _provider_name, _model_name = validate_provider(llm_config, logger)
     
-    # Determine mode
+    # Determine mode: CLI flags win; config.yaml `mode:` is the default
     if args.minimal:
         mode = "minimal"
     elif args.gui:
         mode = "gui"
     else:
-        mode = "terminal"
+        mode = cfg.mode
     
     # Import and run (lazy import for faster startup)
     from assistant_app.services.spectravoice_assistant import SpectraVoiceAssistant
     
     assistant = SpectraVoiceAssistant(
         mode=mode, 
-        debug=args.debug,
+        debug=args.debug or cfg.debug,
         voice=args.voice,
         whisper_model=args.whisper_model,
         llm_provider=provider,  # Pass validated provider directly
+        config_manager=config_manager,
     )
     assistant.run()
 

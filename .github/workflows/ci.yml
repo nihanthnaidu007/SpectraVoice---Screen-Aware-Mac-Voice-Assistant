@@ -31,8 +31,10 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         # Only platform-independent deps are needed: the unit tests cover the
-        # command sandbox, privacy consent gate, logging, and LLM provider logic
-        # with mocks — no macOS frameworks, audio devices, or torch required.
-        run: pip install pytest openai httpx python-dotenv
+        # command sandbox, privacy consent gate, logging, config loading, TTS
+        # streaming, and the transcription worker with mocks — no macOS
+        # frameworks, audio devices, or torch required. PyYAML backs the
+        # config tests; openai backs the streaming-TTS fake.
+        run: pip install pytest openai httpx python-dotenv pyyaml
       - name: Run tests
         run: pytest tests/ -q

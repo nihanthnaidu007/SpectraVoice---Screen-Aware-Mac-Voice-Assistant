@@ -6,6 +6,26 @@
 # Operation mode: terminal, gui, or minimal
 mode: terminal
 
+# Per-mode runtime profiles: screen quality/scale, Whisper model, LLM max tokens.
+# The profile for the active mode applies unless the same key is set elsewhere
+# in this file (e.g. voice.whisper_model) or overridden on the command line.
+modes:
+  terminal:
+    screen_quality: 80
+    screen_scale: 0.8
+    whisper_model: base
+    max_tokens: 800
+  gui:
+    screen_quality: 80
+    screen_scale: 0.8
+    whisper_model: base
+    max_tokens: 800
+  minimal:
+    screen_quality: 60
+    screen_scale: 0.6
+    whisper_model: tiny
+    max_tokens: 300
+
 # Enable debug mode for verbose logging
 debug: false
 
@@ -39,8 +59,9 @@ screen:
 
 # LLM Provider Settings
 llm:
-  # Provider type: cloud (OpenAI) or local (Ollama)
-  provider: cloud
+  # Provider type: cloud (OpenAI), local (Ollama), or auto
+  # (auto = interactive/GUI selection at startup, the legacy behavior)
+  provider: auto
   
   # Cloud (OpenAI GPT‑5) settings
   cloud_model: gpt-5
@@ -115,3 +136,48 @@ safety:
   
   # Require confirmation for certain actions (not yet implemented)
   require_confirmation: false
+
+# Barge-in Settings (interrupting the assistant while it speaks)
+barge_in:
+  # Allow new speech to interrupt TTS playback
+  enabled: true
+  
+  # Minimum transcription confidence (0-1) to interrupt
+  min_confidence: 0.40
+  
+  # Minimum word count to interrupt
+  min_words: 1
+  
+  # Minimum character count to interrupt
+  min_chars: 3
+
+# Microphone Settings
+microphone:
+  # PyAudio input device index (run scripts/list_audio_devices.py to list).
+  # null = system default input device
+  input_device: null
+  
+  # Energy threshold for speech detection (higher = less sensitive to noise)
+  energy_threshold: 5000
+  
+  # Automatically adjust energy threshold while listening
+  dynamic_energy_threshold: false
+  
+  # Seconds of silence before considering an utterance complete
+  pause_threshold: 0.8
+  
+  # Seconds spent calibrating for ambient noise at startup
+  ambient_noise_seconds: 1.0
+  
+  # Transcribe inside the audio callback (legacy pre-streaming behavior)
+  # instead of a dedicated transcription thread (default: off-thread)
+  inline_transcription: false
+
+# TTS Output Settings
+tts:
+  # PyAudio output device index (run scripts/list_audio_devices.py to list).
+  # null = system default output device
+  output_device: null
+  
+  # Use tts-1-hd for higher quality synthesis
+  hd_quality: true
