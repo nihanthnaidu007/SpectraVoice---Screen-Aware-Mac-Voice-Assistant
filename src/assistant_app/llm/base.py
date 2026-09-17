@@ -47,7 +47,6 @@ from .types import (
     LLMConfig,
     LLMMessage,
     LLMResponse,
-    LLMError,
 )
 
 
@@ -66,25 +65,21 @@ class LLMProvider(ABC):
     @abstractmethod
     def name(self) -> str:
         """Human-readable name of the provider."""
-        pass
     
     @property
     @abstractmethod
     def model_name(self) -> str:
         """Currently configured model name."""
-        pass
     
     @property
     @abstractmethod
     def supports_vision(self) -> bool:
         """Whether this provider/model supports vision (image) input."""
-        pass
     
     @property
     @abstractmethod
     def supports_tools(self) -> bool:
         """Whether this provider/model supports function/tool calling."""
-        pass
     
     @abstractmethod
     def is_available(self) -> tuple[bool, str]:
@@ -96,7 +91,6 @@ class LLMProvider(ABC):
             - For cloud: checks API key validity
             - For local: checks if Ollama is running and model exists
         """
-        pass
     
     @abstractmethod
     def generate(
@@ -123,7 +117,6 @@ class LLMProvider(ABC):
         Raises:
             LLMError: On any provider-specific error
         """
-        pass
     
     @abstractmethod
     def generate_with_vision(
@@ -156,7 +149,6 @@ class LLMProvider(ABC):
         Raises:
             LLMError: On any provider-specific error, including lack of vision support
         """
-        pass
     
     def get_status(self) -> dict[str, Any]:
         """

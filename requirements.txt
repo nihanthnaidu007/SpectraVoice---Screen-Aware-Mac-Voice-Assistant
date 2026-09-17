@@ -7,7 +7,7 @@ httpx>=0.24.0
 SpeechRecognition>=3.10.0
 PyAudio>=0.2.14
 soundfile>=0.12.0
-openai-whisper @ git+https://github.com/openai/whisper.git
+openai-whisper==20250625
 
 # Vision & Screen Capture
 opencv-python>=4.8.0

@@ -10,14 +10,15 @@ from typing import Any
 import openai
 
 from assistant_app.utils.logging_config import get_logger
+
 from .base import LLMProvider
 from .types import (
     LLMConfig,
+    LLMError,
+    LLMErrorType,
     LLMMessage,
     LLMResponse,
     LLMToolCall,
-    LLMError,
-    LLMErrorType,
 )
 
 logger = get_logger(__name__)

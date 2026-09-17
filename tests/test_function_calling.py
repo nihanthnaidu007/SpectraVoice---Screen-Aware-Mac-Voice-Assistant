@@ -8,21 +8,9 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, "src"))
 
-from assistant_app.tools.tool_executor import (
-    ToolExecutor, 
-    ToolResult, 
-    SafetyConfig,
-    TOOL_SCHEMAS,
-    APP_NAME_MAPPINGS,
-    BLOCKED_COMMANDS,
-    SAFE_COMMAND_PREFIXES
-)
-from assistant_app.tools.safety import (
-    SafetyValidator,
-    RiskLevel,
-    HIGH_RISK_PATTERNS,
-    BLOCKED_OPERATIONS
-)
+from assistant_app.tools import command_sandbox
+from assistant_app.tools.safety import RiskLevel, SafetyValidator
+from assistant_app.tools.tool_executor import APP_NAME_MAPPINGS, SafetyConfig, ToolExecutor, ToolResult
 
 
 def test_tool_schemas():
@@ -89,12 +77,12 @@ def test_safety_config():
     # Check defaults
     assert config.require_confirmation == False
     assert len(config.blocked_commands) > 0
-    assert len(config.safe_command_prefixes) > 0
+    assert len(command_sandbox.ALLOWED_BINARIES) > 0
     assert config.max_command_timeout == 60
     assert config.dry_run == False
     
     print(f"  ✅ {len(config.blocked_commands)} blocked commands")
-    print(f"  ✅ {len(config.safe_command_prefixes)} safe command prefixes")
+    print(f"  ✅ {len(command_sandbox.ALLOWED_BINARIES)} sandbox-allowlisted binaries")
     print("✅ Safety config test passed")
 
 
@@ -166,16 +154,16 @@ def test_safety_validator():
     validator = SafetyValidator(enable_confirmation=False)
     
     # Test low risk operation
-    allowed, reason, risk = validator.validate("open_application", {"name": "Safari"})
+    allowed, _reason, risk = validator.validate("open_application", {"name": "Safari"})
     assert allowed
     assert risk == RiskLevel.LOW
-    print(f"  ✅ Low risk: open Safari")
+    print("  ✅ Low risk: open Safari")
     
     # Test blocked operation
-    allowed, reason, risk = validator.validate("run_command", {"command": "sudo rm -rf /"})
+    allowed, _reason, risk = validator.validate("run_command", {"command": "sudo rm -rf /"})
     assert not allowed
     assert risk == RiskLevel.CRITICAL
-    print(f"  ✅ Blocked: sudo rm -rf /")
+    print("  ✅ Blocked: sudo rm -rf /")
     
     print("✅ Safety validator test passed")
 

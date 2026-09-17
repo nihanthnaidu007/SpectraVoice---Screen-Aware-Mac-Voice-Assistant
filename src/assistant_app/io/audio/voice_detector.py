@@ -210,7 +210,7 @@ class SmartVoiceDetector:
     def _is_hallucination_pattern(self, text: str) -> bool:
         """Check if text matches common Whisper hallucination patterns."""
         # Brackets indicate non-speech audio descriptions
-        if text.startswith('[') or text.startswith('('):
+        if text.startswith(("[", "(")):
             return True
         # Music symbols
         if '♪' in text or '♫' in text:
@@ -220,9 +220,7 @@ class SmartVoiceDetector:
             return True
         # Very repetitive text (same word repeated)
         words = text.split()
-        if len(words) >= 3 and len(set(words)) == 1:
-            return True
-        return False
+        return len(words) >= 3 and len(set(words)) == 1
     
     def _is_self_echo(self, text: str) -> bool:
         """Check if text is the assistant's own speech (self-echo)."""

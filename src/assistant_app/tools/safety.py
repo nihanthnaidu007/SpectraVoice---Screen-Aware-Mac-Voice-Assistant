@@ -1,10 +1,10 @@
 """Safety Validation System for Tool Execution."""
 
-import os
 import json
+import os
 import time
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 
 from assistant_app.utils.logging_config import get_logger

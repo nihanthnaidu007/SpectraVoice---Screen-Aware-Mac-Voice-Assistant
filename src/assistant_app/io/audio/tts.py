@@ -11,9 +11,9 @@ Thread Safety:
 The stop() method can be safely called from any thread at any time.
 """
 
-import time
 import threading
-from typing import Callable
+import time
+from collections.abc import Callable
 from enum import Enum
 
 import openai

@@ -4,7 +4,7 @@ Core Package
 Core modules for SpectraVoice.
 """
 
-from .conversation import ConversationMemory
 from .assistant import Assistant
+from .conversation import ConversationMemory
 
-__all__ = ["ConversationMemory", "Assistant"]
+__all__ = ["Assistant", "ConversationMemory"]

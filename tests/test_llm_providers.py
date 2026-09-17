@@ -31,9 +31,8 @@ MANUAL VALIDATION STEPS:
 
 import os
 import sys
-import json
-from unittest.mock import Mock, patch, MagicMock
 from dataclasses import dataclass
+from unittest.mock import MagicMock, Mock, patch
 
 # Add project root and src to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,20 +41,15 @@ sys.path.insert(0, os.path.join(project_root, "src"))
 
 from assistant_app.llm import (
     LLMConfig,
-    LLMMessage,
-    LLMResponse,
-    LLMToolCall,
     LLMError,
     LLMErrorType,
-    ProviderType,
-    LLMProvider,
-    OpenAIProvider,
+    LLMMessage,
     OllamaProvider,
+    OpenAIProvider,
+    ProviderType,
     create_provider,
     get_provider_from_env,
-    auto_select_provider,
 )
-
 
 # =============================================================================
 # CLOUD MODE TESTS
@@ -117,7 +111,7 @@ def test_cloud_provider_missing_api_key():
     try:
         config = LLMConfig.for_cloud()
         try:
-            provider = create_provider(config)
+            _provider = create_provider(config)
             assert False, "Should have raised LLMError"
         except LLMError as e:
             assert e.error_type == LLMErrorType.PROVIDER_UNAVAILABLE
@@ -502,7 +496,7 @@ def test_provider_selection_invalid():
     
     with patch.dict(os.environ, {"LLM_PROVIDER": "invalid_provider"}, clear=False):
         try:
-            config = get_provider_from_env()
+            _config = get_provider_from_env()
             assert False, "Should have raised LLMError"
         except LLMError as e:
             assert "cloud" in e.user_message.lower() or "local" in e.user_message.lower()

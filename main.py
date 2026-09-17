@@ -24,13 +24,14 @@ LLM Provider Selection:
     Set LLM_PROVIDER=cloud or LLM_PROVIDER=local to skip the GUI.
 """
 
-import sys
 import pathlib
+import sys
 
 # Ensure src/ is importable when running `python main.py` from repo root
 sys.path.insert(0, str(pathlib.Path(__file__).parent / "src"))
 
 import argparse
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -124,11 +125,11 @@ def get_llm_config(args):
     3. GUI selector (default for interactive sessions)
     4. Default to cloud mode (for non-interactive)
     """
-    from assistant_app.llm import LLMConfig, ProviderType
+    from assistant_app.llm import LLMConfig
     from assistant_app.llm.factory import (
-        select_provider_interactive, 
-        select_provider_gui,
         get_provider_from_env,
+        select_provider_gui,
+        select_provider_interactive,
     )
     
     # Explicit CLI flags take priority
@@ -214,7 +215,7 @@ def validate_provider(llm_config, logger):
             print("2. Start Ollama server:")
             print("   ollama serve")
             print()
-            print(f"3. Pull the model:")
+            print("3. Pull the model:")
             print(f"   ollama pull {model_name}")
             print()
             print("4. Run the assistant again:")
@@ -233,9 +234,12 @@ def main():
     """Main entry point."""
     args = parse_args()
     
-    # Setup logging first (before any imports that might log)
-    from assistant_app.utils.logging_config import setup_logging, get_logger
+    # Setup logging first (before any imports that might log), then install
+    # crash capture so uncaught exceptions (including in background threads)
+    # leave a traceback in the log file.
+    from assistant_app.utils.logging_config import get_logger, install_crash_handlers, setup_logging
     setup_logging(debug=args.debug)
+    install_crash_handlers()
     logger = get_logger(__name__)
     
     if args.debug:
@@ -251,7 +255,7 @@ def main():
         sys.exit(1)
     
     # Validate provider is available (fail-fast)
-    provider, provider_name, model_name = validate_provider(llm_config, logger)
+    provider, _provider_name, _model_name = validate_provider(llm_config, logger)
     
     # Determine mode
     if args.minimal:
