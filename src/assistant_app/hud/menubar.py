@@ -140,7 +140,12 @@ class MenuBarHUD(NSObject):
         )
         menu.addItem_(NSMenuItem.separatorItem())
 
-        self._add_item(menu, "Settings…", "onSettings_")
+        # W4 D2: history / privacy dashboard — below the meeting controls, in
+        # its own section. The recording glyph stays first-order in the header
+        # (menu_summary); this item only OPENS the window — no destructive
+        # action lives behind a menu click (spec fork 3).
+        self._add_item(menu, "History\u2026", "onHistory_")
+        self._add_item(menu, "Settings\u2026", "onSettings_")
         quit_item = self._add_item(menu, "Quit SpectraVoice", "onQuit_")
         quit_item.setKeyEquivalent_(QUIT_KEY)
 
@@ -174,6 +179,9 @@ class MenuBarHUD(NSObject):
 
     def onMeetingPause_(self, sender) -> None:
         self._actions.pause_meeting()
+
+    def onHistory_(self, sender) -> None:
+        self._actions.open_history()
 
     def onSettings_(self, sender) -> None:
         self._actions.open_settings()

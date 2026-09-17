@@ -127,6 +127,61 @@ LLM Provider Options:
         "Requires meeting.enabled: true in config.yaml (kill-switch).",
     )
 
+    # History / privacy surface (W4) — headless, local-only, exits on completion
+    # (the --doctor pattern). Reads scan the meeting store on disk; export
+    # copies one meeting to a user-chosen directory (the only off-device path);
+    # deletes are directory-granularity and refuse to run without --confirm.
+    parser.add_argument(
+        "--history-list",
+        action="store_true",
+        help="List every stored meeting (id, date, duration, utterances, gaps, "
+        "summary) from the local corpus and exit. Read-only.",
+    )
+    parser.add_argument(
+        "--history-search",
+        type=str,
+        default=None,
+        metavar="QUERY",
+        help="Search stored meeting utterances for QUERY (case-insensitive) "
+        "and exit. Read-only; local disk only.",
+    )
+    parser.add_argument(
+        "--history-after",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="With --history-list/--history-search: only meetings started on/after this date (local time)",
+    )
+    parser.add_argument(
+        "--history-before",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="With --history-list/--history-search: only meetings started on/before this date (local time)",
+    )
+    parser.add_argument(
+        "--history-export",
+        nargs="+",
+        metavar=("MEETING_ID", "DIR"),
+        help="Copy one stored meeting (transcript, summary, clips) to DIR and "
+        "exit. DIR defaults to history.export_dir from config.yaml. Export is "
+        "the ONLY path that moves meeting data off the corpus directory.",
+    )
+    parser.add_argument(
+        "--history-delete",
+        type=str,
+        default=None,
+        metavar="MEETING_ID|all",
+        help="Permanently delete one stored meeting (its whole directory) or "
+        "every stored meeting (all), then exit. Refuses to run without --confirm.",
+    )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicit confirmation for destructive actions (--history-delete). "
+        "Deletion is permanent and cannot be undone.",
+    )
+
     # Voice and model arguments
     parser.add_argument(
         "--voice",
@@ -280,6 +335,142 @@ def _run_doctor(args) -> int:
     return doctor_exit_code(results)
 
 
+def _wants_history(args) -> bool:
+    """Any of the headless W4 history flags requested."""
+    return bool(
+        args.history_list
+        or args.history_search is not None
+        or args.history_export
+        or args.history_delete
+    )
+
+
+def _print_meeting_rows(rows: list[dict]) -> None:
+    """Human-aligned snapshot rows (greppable; the dashboard renders richer)."""
+    if not rows:
+        print("No stored meetings.")
+        return
+    from assistant_app.hud.history_model import format_duration  # local: keeps cli import-light
+
+    print(
+        f"{'MEETING':<20} {'STARTED':<19} {'DURATION':>9} {'UTT':>5} {'GAPS':>5} "
+        f"{'SUMMARY':<7} FLAGS"
+    )
+    for row in rows:
+        flags = "RECORDING" if row["is_recording"] else ""
+        print(
+            f"{row['meeting_id']:<20} {row['started_at_iso']:<19} "
+            f"{format_duration(row['duration_seconds']):>9} {row['utterance_count']:>5} "
+            f"{row['gap_count']:>5} {'yes' if row['summary_present'] else 'no':<7} {flags}"
+        )
+
+
+def _print_search_results(results: list[dict]) -> None:
+    """Meeting lines + indented matched snippets (bounded per meeting)."""
+    for row in results:
+        print(
+            f"{row['meeting_id']}  {row['started_at_iso']}  "
+            f"{row['utterance_count']} utterance(s), {row['gap_count']} gap(s)"
+            + ("  [RECORDING]" if row["is_recording"] else "")
+        )
+        for snippet in row["matched_snippets"]:
+            print(f"    » {snippet}")
+
+
+def _run_history(args) -> int:
+    """Headless history surface (W4 D3): list/search/export/delete, then exit.
+
+    Runs before any assistant/LLM startup — dependency-light modules only,
+    fully Linux-testable. Exit codes: 0 ok, 1 runtime failure (not found,
+    export destination exists), 2 usage/refusal (bad date, missing --confirm,
+    no destination).
+    """
+    from assistant_app.services import history_ops, history_search
+    from assistant_app.utils.config import init_config
+
+    config_manager = init_config(args.config)
+    meeting_cfg = config_manager.config.meeting
+
+    # Validate date flags up front (scan_history re-derives these; this is
+    # the fail-fast that turns a typo into exit code 2, not an empty table).
+    try:
+        history_search.date_range_bounds(args.history_after, args.history_before)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        return 2
+    after = args.history_after if args.history_after else None
+    before = args.history_before if args.history_before else None
+
+    # Destructive paths first: refuse BEFORE any work when unconfirmed.
+    if args.history_delete is not None:
+        if not args.confirm:
+            print(
+                "\u274c Refusing to delete without --confirm — deletion is permanent "
+                "(transcripts, summaries, and clips are removed from disk)."
+            )
+            return 2
+        try:
+            if args.history_delete == "all":
+                removed = history_ops.delete_all_meetings(meeting_cfg, confirm=True)
+                print(f"\U0001f5d1\ufe0f Deleted {removed} meeting(s).")
+            else:
+                deleted = history_ops.delete_meeting(meeting_cfg, args.history_delete, confirm=True)
+                if deleted:
+                    print(f"\U0001f5d1\ufe0f Deleted meeting {args.history_delete}.")
+                else:
+                    print(f"\u26a0\ufe0f No such stored meeting: {args.history_delete}")
+                    return 1
+            return 0
+        except history_ops.HistoryLookupError as exc:
+            print(f"\u274c {exc}")
+            return 1
+
+    if args.history_export:
+        parts = args.history_export
+        meeting_id = parts[0]
+        dest = parts[1] if len(parts) > 1 else config_manager.config.history.export_dir
+        if not dest:
+            print(
+                "\u274c No export destination: pass DIR or set history.export_dir "
+                "in config.yaml (export copies meeting data to the directory you choose)."
+            )
+            return 2
+        if len(parts) > 2:
+            print("\u274c --history-export takes MEETING_ID and an optional DIR")
+            return 2
+        try:
+            out = history_ops.export_meeting(meeting_cfg, meeting_id, dest)
+        except history_ops.HistoryLookupError as exc:
+            print(f"\u274c {exc}")
+            return 1
+        except FileExistsError as exc:
+            print(f"\u274c {exc}")
+            return 1
+        print(f"\U0001f4e4 Exported {meeting_id} \u2192 {out}")
+        return 0
+
+    # Read-only paths. The CLI process is not the recorder, so no live ids are
+    # injected here (the dashboard injects them): a concurrently-recording
+    # meeting still scans tolerantly, just without the RECORDING flag.
+    if args.history_search is not None:
+        try:
+            results = history_search.search_history(
+                meeting_cfg, args.history_search, after=after, before=before
+            )
+        except ValueError as exc:
+            print(f"\u274c {exc}")
+            return 2
+        if not results:
+            print(f"No matches for {args.history_search!r}.")
+            return 0
+        _print_search_results(results)
+        return 0
+
+    rows = history_search.scan_history(meeting_cfg, after=after, before=before)
+    _print_meeting_rows(rows)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
     args = parse_args(argv)
@@ -287,6 +478,11 @@ def main(argv: list[str] | None = None) -> int:
     # --doctor is fully headless: config + report + exit, no assistant startup.
     if args.doctor:
         return _run_doctor(args)
+
+    # History surface (W4) is headless too: config + local file scan + exit,
+    # before any assistant/LLM/provider startup.
+    if _wants_history(args):
+        return _run_history(args)
 
     # Load config (config.yaml + VA_* env overrides) before logging setup so the
     # `logging:` section configures the rotating file handler.

@@ -165,6 +165,23 @@ class MeetingConfig:
 
 
 @dataclass
+class HistoryConfig:
+    """History surface settings (W4): the privacy dashboard / search / CLI knobs.
+
+    Deliberately minimal (H7): the settings window auto-renders every field,
+    so only genuine user knobs live here — each with implemented behavior.
+    Search itself has no knobs (scan-on-query is the locked decision, not a
+    setting), and retention stays on the meeting/dictation sections (one
+    shared mechanism, W3 D4).
+    """
+
+    # Default export destination ("" = ask every time). Export is the only
+    # off-device path; a configured default just pre-fills the destination —
+    # the user still chooses (dashboard panel / CLI DIR argument overrides).
+    export_dir: str = ""
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
     level: str = "INFO"
@@ -261,6 +278,7 @@ class AssistantConfig:
     supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
     dictation: DictationConfig = field(default_factory=DictationConfig)
     meeting: MeetingConfig = field(default_factory=MeetingConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
     modes: dict[str, ModeProfile] = field(default_factory=dict)
     mode: str = "terminal"
     debug: bool = False
@@ -340,6 +358,11 @@ class ConfigManager:
         f"{ENV_PREFIX}MEETING_LANGUAGE": ("meeting", "language"),
         f"{ENV_PREFIX}MEETING_SUMMARIZER": ("meeting", "summarizer"),
         f"{ENV_PREFIX}MEETING_RETENTION_HOURS": ("meeting", "retention_hours"),
+
+        # History surface (W4) — dashboard/search/export knobs. Deletion has
+        # NO env mapping on purpose: destructive actions want explicit intent,
+        # and there is nothing to configure about them.
+        f"{ENV_PREFIX}HISTORY_EXPORT_DIR": ("history", "export_dir"),
         
         # Mode
         f"{ENV_PREFIX}MODE": ("mode", None),
@@ -487,6 +510,7 @@ class ConfigManager:
             supervisor=SupervisorConfig(**section('supervisor', SupervisorConfig)),
             dictation=DictationConfig(**section('dictation', DictationConfig)),
             meeting=MeetingConfig(**section('meeting', MeetingConfig)),
+            history=HistoryConfig(**section('history', HistoryConfig)),
             modes=modes,
             mode=config_dict.get('mode', 'terminal'),
             debug=config_dict.get('debug', False),
@@ -654,6 +678,10 @@ class ConfigManager:
             )
         if cfg.meeting.chunk_chars < 200:
             issues.append(f"Meeting chunk_chars must be >= 200, got: {cfg.meeting.chunk_chars}")
+
+        # History validation (W4) — minimal: the section holds one path knob.
+        if cfg.history.export_dir != cfg.history.export_dir.strip():
+            issues.append("History export_dir must not have leading/trailing whitespace")
         
         # TTS validation
         if cfg.tts.output_device is not None and cfg.tts.output_device < 0:
@@ -781,6 +809,9 @@ class ConfigManager:
                 'summarizer': cfg.meeting.summarizer,
                 'cloud_consent': cfg.meeting.cloud_consent,
                 'chunk_chars': cfg.meeting.chunk_chars,
+            },
+            'history': {
+                'export_dir': cfg.history.export_dir,
             },
             'modes': {
                 name: {

@@ -135,6 +135,12 @@ class MeetingController:
         with self._lock:
             return self._paths
 
+    @property
+    def is_recording(self) -> bool:
+        """True while a meeting capture is in flight (dashboard live-marking)."""
+        with self._lock:
+            return self._recording
+
     def start(self) -> bool:
         """Begin recording. Refuses without recording consent (kill-switch or
         missing explicit start) and while already recording."""

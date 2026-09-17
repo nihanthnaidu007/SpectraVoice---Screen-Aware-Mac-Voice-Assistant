@@ -75,6 +75,9 @@ class _RecordingStub:
     def open_settings(self) -> None:
         self.calls.append("open_settings")
 
+    def open_history(self) -> None:
+        self.calls.append("open_history")
+
     def quit(self) -> None:
         self.calls.append("quit")
 
@@ -163,6 +166,7 @@ class TestHUDActionsSurface:
             "toggle_meeting",
             "pause_meeting",
             "open_settings",
+            "open_history",
             "quit",
         ):
             assert callable(getattr(stub, name)), name
@@ -170,6 +174,11 @@ class TestHUDActionsSurface:
     def test_protocol_declares_meeting_actions(self):
         assert callable(getattr(HUDActions, "toggle_meeting", None))
         assert callable(getattr(HUDActions, "pause_meeting", None))
+
+    def test_protocol_declares_history_action(self):
+        # W4 D2: the History… menu item dispatches open_history — a missing
+        # method is a main-thread AttributeError on a real Mac.
+        assert callable(getattr(HUDActions, "open_history", None))
 
 
 class TestMeetingCLIFlag:

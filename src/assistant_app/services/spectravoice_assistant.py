@@ -95,6 +95,13 @@ class AssistantHUDActions:
 
         open_settings_window(self._assistant.config_manager)
 
+    def open_history(self) -> None:
+        # history_window is darwin-only (lazy import raises ImportError with
+        # an explicit message off-darwin) — the settings_window precedent.
+        from assistant_app.hud.history_window import open_history_window
+
+        open_history_window(self._assistant)
+
     def quit(self) -> None:
         self._assistant.request_shutdown()
 
@@ -246,8 +253,15 @@ class SpectraVoiceAssistant:
         # the audio callback branches to the meeting FIRST).
         self.meeting_consent = RecordingConsent(feature_enabled=cfg.meeting.enabled)
         self.meeting: MeetingController | None = None
+        # H9: retention is decoupled from the meeting kill-switch — old
+        # artifacts are swept at launch even when new recording is disabled,
+        # otherwise turning the feature off orphans old meeting dirs forever.
+        # The outcome is kept in memory for the dashboard's sweep visibility
+        # (RetentionState.last_sweep_*); nothing is persisted (H3/H5).
+        self._last_sweep: dict | None = None
+        sweep = run_startup_cleanup(cfg.meeting)  # D4/H9: TTL sweep runs regardless
+        self._last_sweep = {"removed": sweep, "at": time.time()}
         if cfg.meeting.enabled:
-            run_startup_cleanup(cfg.meeting)  # D4: TTL sweep of old meeting dirs
             self.meeting = MeetingController(
                 cfg.meeting,
                 transcribe=self._meeting_recognize,
@@ -301,6 +315,66 @@ class SpectraVoiceAssistant:
             self.resume_screen_sharing()
         else:
             self.pause_screen_sharing()
+
+    # === HISTORY / PRIVACY DASHBOARD (W4 D2) ===
+    # The dashboard reflects and controls consent — it never bypasses a gate.
+    # Corpus scans and file IO run on the CALLER's worker thread (the window
+    # dispatches them off the main thread, H1); these adapters are thin and
+    # synchronous. Dashboard content is rendered only — nothing here is ever
+    # spoken or fed into the assistant/screen pipeline.
+
+    def open_history(self) -> None:
+        """Open the history/privacy dashboard (HUD menu action, main thread)."""
+        # history_window is darwin-only (lazy import raises ImportError with
+        # an explicit message off-darwin) — the settings_window precedent.
+        from assistant_app.hud.history_window import open_history_window
+
+        open_history_window(self)
+
+    def live_meeting_ids(self) -> frozenset[str]:
+        """Meeting ids with an in-flight recording (the dashboard marks them)."""
+        meeting = self.meeting
+        if meeting is None or not meeting.is_recording:
+            return frozenset()
+        paths = meeting.paths
+        return frozenset({paths.meeting_id}) if paths is not None else frozenset()
+
+    def history_snapshot(self):
+        """Pure-model snapshot of corpus + gates (worker-thread caller)."""
+        from assistant_app.hud.history_model import build_history_snapshot
+
+        cfg = self.config_manager.config
+        return build_history_snapshot(
+            cfg.meeting,
+            self.meeting_consent,
+            self.privacy_consent,
+            live_meeting_ids=self.live_meeting_ids(),
+            last_sweep=self._last_sweep,
+        )
+
+    def history_summary_text(self, meeting_id: str) -> str:
+        """Stored summary.md text for one meeting ("" when absent)."""
+        from assistant_app.services import history_search
+
+        return history_search.read_summary_text(self.config_manager.config.meeting, meeting_id)
+
+    def history_export_meeting(self, meeting_id: str, dest_dir: str) -> str:
+        """Copy one meeting's directory to the user-chosen destination."""
+        from assistant_app.services import history_ops
+
+        return history_ops.export_meeting(self.config_manager.config.meeting, meeting_id, dest_dir)
+
+    def history_delete_meeting(self, meeting_id: str) -> None:
+        """Directory-granularity delete of one meeting (confirmed upstream)."""
+        from assistant_app.services import history_ops
+
+        history_ops.delete_meeting(self.config_manager.config.meeting, meeting_id, confirm=True)
+
+    def history_delete_all(self) -> int:
+        """Delete every stored meeting directory (confirmed upstream)."""
+        from assistant_app.services import history_ops
+
+        return history_ops.delete_all_meetings(self.config_manager.config.meeting, confirm=True)
 
     def _on_config_changed(self, config) -> None:
         """ConfigManager change notification (reload + settings apply).
