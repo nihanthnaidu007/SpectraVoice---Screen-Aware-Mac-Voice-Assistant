@@ -61,6 +61,55 @@ class HotkeyConfig:
     push_to_talk: str = "space"
     pause_resume: str = "cmd+shift+p"
     quit: str = "cmd+shift+q"
+    # Tap to cycle dictation activation (push_to_talk <-> vad)
+    dictation_mode: str = "cmd+shift+d"
+
+
+@dataclass
+class DictationConfig:
+    """Dictation mode settings (W1): speech -> cleaned text -> typed at cursor.
+
+    Local-first: transcripts never leave the device (Whisper runs locally) and
+    audio is session-only unless persist_audio is enabled. Styles and snippets
+    live here — config.yaml stays the single settings source.
+    """
+    enabled: bool = False
+    # "push_to_talk" (hold the hotkey) or "vad" (continuous, silence-gap ended)
+    activation: str = "push_to_talk"
+    # Cleanup style: "standard" (filler removal for prose) or "minimal"
+    # (verbatim text for terminals — only snippets expand)
+    style: str = "standard"
+    # Per-app style overrides, lowercased app name -> style
+    app_styles: dict[str, str] = field(
+        default_factory=lambda: {"terminal": "minimal", "iterm": "minimal", "iterm2": "minimal"}
+    )
+    filler_removal: bool = True
+    filler_words: list[str] = field(
+        default_factory=lambda: ["um", "uh", "er", "ah", "hmm", "like", "you know", "i mean", "sort of", "kind of"]
+    )
+    # Spoken phrase -> typed expansion
+    snippets: dict[str, str] = field(
+        default_factory=lambda: {
+            "period": ".",
+            "comma": ",",
+            "question mark": "?",
+            "exclamation mark": "!",
+            "colon": ":",
+            "semicolon": ";",
+            "open paren": "(",
+            "close paren": ")",
+            "new line": "\n",
+            "new paragraph": "\n\n",
+        }
+    )
+    # Seconds of silence that end a VAD-mode utterance
+    vad_silence_timeout: float = 1.2
+    # Insert an Enter keystroke after each dictation insert
+    insert_enter: bool = False
+    # Privacy: dictation audio dies with the session unless explicitly enabled
+    persist_audio: bool = False
+    # Where persisted clips go (local disk only — never uploaded)
+    audio_dir: str = ""
 
 
 @dataclass
@@ -158,6 +207,7 @@ class AssistantConfig:
     microphone: MicrophoneConfig = field(default_factory=MicrophoneConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
+    dictation: DictationConfig = field(default_factory=DictationConfig)
     modes: dict[str, ModeProfile] = field(default_factory=dict)
     mode: str = "terminal"
     debug: bool = False
@@ -282,6 +332,11 @@ class ConfigManager:
             # Supervisor (auto-restart)
             f"{self.ENV_PREFIX}SUPERVISOR_ENABLED": ("supervisor", "enabled"),
             f"{self.ENV_PREFIX}SUPERVISOR_MAX_RESTARTS": ("supervisor", "max_restarts"),
+
+            # Dictation (W1)
+            f"{self.ENV_PREFIX}DICTATION_ENABLED": ("dictation", "enabled"),
+            f"{self.ENV_PREFIX}DICTATION_ACTIVATION": ("dictation", "activation"),
+            f"{self.ENV_PREFIX}DICTATION_PERSIST_AUDIO": ("dictation", "persist_audio"),
             
             # Mode
             f"{self.ENV_PREFIX}MODE": ("mode", None),
@@ -366,6 +421,7 @@ class ConfigManager:
             microphone=MicrophoneConfig(**section('microphone', MicrophoneConfig)),
             tts=TTSConfig(**section('tts', TTSConfig)),
             supervisor=SupervisorConfig(**section('supervisor', SupervisorConfig)),
+            dictation=DictationConfig(**section('dictation', DictationConfig)),
             modes=modes,
             mode=config_dict.get('mode', 'terminal'),
             debug=config_dict.get('debug', False),
@@ -470,6 +526,17 @@ class ConfigManager:
         
         if cfg.microphone.ambient_noise_seconds < 0:
             issues.append(f"Microphone ambient_noise_seconds must be >= 0, got: {cfg.microphone.ambient_noise_seconds}")
+
+        # Dictation validation
+        if cfg.dictation.activation not in {'push_to_talk', 'vad'}:
+            issues.append(f"Invalid dictation.activation: {cfg.dictation.activation}. Valid: push_to_talk, vad")
+        if cfg.dictation.style not in {'standard', 'minimal'}:
+            issues.append(f"Invalid dictation.style: {cfg.dictation.style}. Valid: standard, minimal")
+        for app_name, app_style in cfg.dictation.app_styles.items():
+            if app_style not in {'standard', 'minimal'}:
+                issues.append(f"Invalid dictation.app_styles['{app_name}']: {app_style}. Valid: standard, minimal")
+        if cfg.dictation.vad_silence_timeout <= 0:
+            issues.append(f"Dictation vad_silence_timeout must be > 0, got: {cfg.dictation.vad_silence_timeout}")
         
         # TTS validation
         if cfg.tts.output_device is not None and cfg.tts.output_device < 0:
@@ -558,6 +625,19 @@ class ConfigManager:
                 'window_seconds': cfg.supervisor.window_seconds,
                 'backoff_seconds': cfg.supervisor.backoff_seconds,
                 'backoff_max_seconds': cfg.supervisor.backoff_max_seconds,
+            },
+            'dictation': {
+                'enabled': cfg.dictation.enabled,
+                'activation': cfg.dictation.activation,
+                'style': cfg.dictation.style,
+                'app_styles': dict(cfg.dictation.app_styles),
+                'filler_removal': cfg.dictation.filler_removal,
+                'filler_words': list(cfg.dictation.filler_words),
+                'snippets': dict(cfg.dictation.snippets),
+                'vad_silence_timeout': cfg.dictation.vad_silence_timeout,
+                'insert_enter': cfg.dictation.insert_enter,
+                'persist_audio': cfg.dictation.persist_audio,
+                'audio_dir': cfg.dictation.audio_dir,
             },
         }
     

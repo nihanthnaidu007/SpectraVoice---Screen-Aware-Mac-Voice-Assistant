@@ -99,6 +99,23 @@ LLM Provider Options:
         "is set in config.yaml)",
     )
 
+    # Dictation (W1)
+    parser.add_argument(
+        "--dictation",
+        action="store_true",
+        help="Enable dictation mode: speech is cleaned (fillers removed, snippets "
+        "expanded) and typed at the cursor instead of being sent to the assistant",
+    )
+    parser.add_argument(
+        "--dictation-mode",
+        type=str,
+        default=None,
+        choices=["push_to_talk", "vad"],
+        help="Dictation activation: push_to_talk (hold the hotkey) or vad "
+        "(continuous, utterance ends after a silence gap). Default: config.yaml "
+        "dictation.activation",
+    )
+
     # Voice and model arguments
     parser.add_argument(
         "--voice",
@@ -328,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
         whisper_model=args.whisper_model,
         llm_provider=provider,  # Pass validated provider directly
         config_manager=config_manager,
+        dictation_enabled=args.dictation or cfg.dictation.enabled,
+        dictation_activation=args.dictation_mode or cfg.dictation.activation,
     )
     assistant.run()
     return 0

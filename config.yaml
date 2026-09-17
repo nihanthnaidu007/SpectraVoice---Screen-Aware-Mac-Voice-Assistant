@@ -182,6 +182,58 @@ tts:
   # Use tts-1-hd for higher quality synthesis
   hd_quality: true
 
+# Dictation Mode (W1)
+# Speech is transcribed with local Whisper, cleaned (fillers removed, spoken
+# snippets expanded), and typed at the cursor. Nothing leaves this machine:
+# transcription is local-only and audio is kept for the session only unless
+# persist_audio is enabled.
+dictation:
+  # Dictation is off by default; enable with `python main.py --dictation`
+  enabled: false
+
+  # Activation: "push_to_talk" (hold the hotkeys.push_to_talk key while
+  # speaking) or "vad" (continuous — an utterance is inserted after
+  # vad_silence_timeout seconds of silence)
+  activation: push_to_talk
+
+  # Cleanup style: "standard" removes filler words for prose targets;
+  # "minimal" keeps text verbatim (only snippets expand) for terminals
+  style: standard
+
+  # Per-app style overrides (lowercased frontmost app name -> style)
+  app_styles:
+    terminal: minimal
+    iterm: minimal
+    iterm2: minimal
+
+  filler_removal: true
+  filler_words: [um, uh, er, ah, hmm, like, "you know", "i mean", "sort of", "kind of"]
+
+  # Spoken phrase -> typed expansion (applies in every style)
+  snippets:
+    period: "."
+    comma: ","
+    question mark: "?"
+    exclamation mark: "!"
+    colon: ":"
+    semicolon: ";"
+    open paren: "("
+    close paren: ")"
+    new line: "\n"
+    new paragraph: "\n\n"
+
+  # Seconds of silence that end a VAD-mode utterance
+  vad_silence_timeout: 1.2
+
+  # Press Enter after each dictation insert
+  insert_enter: false
+
+  # Privacy: dictation audio is dropped when the session ends. Set true to
+  # write each clip as a WAV file under audio_dir (still local-only, never
+  # uploaded).
+  persist_audio: false
+  audio_dir: ""
+
 # Auto-Restart Supervisor (W2)
 # When enabled, `python main.py` runs the assistant as a supervised child and
 # restarts it after an unhandled crash. All child output — including the Wave 0
