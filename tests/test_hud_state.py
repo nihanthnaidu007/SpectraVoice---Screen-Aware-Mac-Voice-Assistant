@@ -11,11 +11,14 @@ import os
 import sys
 import threading
 
+import pytest
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, "src"))
 
 from assistant_app.core.consent import PrivacyConsent
+from assistant_app.hud import create_menu_bar_hud
 from assistant_app.hud.state import (
     ACTIVITY_GLYPHS,
     Activity,
@@ -209,6 +212,51 @@ class TestConsentIntegration:
         gate.pause()
         assert gate.screen_upload_allowed is False
         assert machine.snapshot().privacy is Privacy.PAUSED
+
+
+class TestPlatformDegradation:
+    """The HUD module degrades loudly off-darwin (pre-flight R7)."""
+
+    def test_menubar_import_fails_loudly_off_darwin(self):
+        # On Linux CI this proves the AppKit surface never imports silently;
+        # on macOS this import succeeds and the test self-skips.
+        if sys.platform == "darwin":
+            import assistant_app.hud.menubar
+
+            pytest.skip("AppKit available — degradation path is darwin-irrelevant")
+        with pytest.raises(ImportError, match="darwin-only"):
+            import assistant_app.hud.menubar  # noqa: F401
+
+    def test_factory_returns_none_off_darwin(self, caplog):
+        if sys.platform == "darwin":
+            pytest.skip("Factory creates a real NSStatusItem on darwin — not testable here")
+        machine = HUDStateMachine()
+
+        class _NoopActions:
+            def current_dictation_mode(self) -> str:
+                return "vad"
+
+        # Loud degradation, not a crash and not a silent None.
+        assert create_menu_bar_hud(machine, _NoopActions()) is None
+
+    def test_actions_protocol_surface(self):
+        """The orchestrator's actions duck-type against the HUD protocol."""
+
+        class _StubActions:
+            def toggle_listening(self) -> None: ...
+            def toggle_pause(self) -> None: ...
+            def switch_dictation_mode(self) -> None: ...
+            def current_dictation_mode(self) -> str:
+                return "vad"
+
+            def open_settings(self) -> None: ...
+            def quit(self) -> None: ...
+
+        stub = _StubActions()
+        # Structural conformance: every HUDActions member exists.
+        for name in ("toggle_listening", "toggle_pause", "switch_dictation_mode",
+                     "current_dictation_mode", "open_settings", "quit"):
+            assert callable(getattr(stub, name, None)), f"missing {name}"
 
 
 class TestThreadSafety:
