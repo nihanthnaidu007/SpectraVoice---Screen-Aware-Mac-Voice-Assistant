@@ -1,6 +1,7 @@
 """SpectraVoice Controller - Main orchestration service."""
 
 import atexit
+import logging
 import os
 import signal
 import threading
@@ -67,11 +68,7 @@ class AssistantHUDActions:
             a.stop_listening_now()
 
     def toggle_pause(self) -> None:
-        a = self._assistant
-        if a.privacy_consent.paused:
-            a.resume_screen_sharing()
-        else:
-            a.pause_screen_sharing()
+        self._assistant.toggle_pause()
 
     def switch_dictation_mode(self) -> None:
         if self._assistant.dictation is not None:
@@ -151,6 +148,11 @@ class SpectraVoiceAssistant:
         self._barge_min_confidence = cfg.barge_in.min_confidence  # Low enough to catch real speech mid-TTS
         self._barge_min_words = cfg.barge_in.min_words  # Single word like "stop" should interrupt
         self._barge_min_chars = cfg.barge_in.min_chars  # Even short commands like "no" count
+        self.tts_muted = False  # hotkey/HUD mute toggle (TTS output only)
+        # Hot-apply (W2 D2): the ONLY config keys the running process re-reads
+        # live. Registered on the ConfigManager change dispatcher shared with
+        # reload(); the taxonomy is settings_model.HOT_APPLY_KEYS (keep in sync).
+        self.config_manager.on_reload(self._on_config_changed)
         
         self.whisper_model = whisper_model or profile.whisper_model
         self.voice = voice or cfg.voice.tts_voice
@@ -258,6 +260,34 @@ class SpectraVoiceAssistant:
         else:
             self.logger.info("🔒 Pause cleared — screen sharing still off (no consent)")
     
+    def toggle_mute(self) -> None:
+        """Hotkey/HUD mute toggle — suppresses TTS output only; consent and
+        screen behavior are untouched."""
+        self.tts_muted = not self.tts_muted
+        self.logger.info(f"🔇 TTS {'muted' if self.tts_muted else 'unmuted'}")
+
+    def toggle_pause(self) -> None:
+        """Hotkey/HUD pause toggle — the same consent-gated pause/resume pair
+        every other consumer uses (the HUD reflects and controls, never bypasses)."""
+        if self.privacy_consent.paused:
+            self.resume_screen_sharing()
+        else:
+            self.pause_screen_sharing()
+
+    def _on_config_changed(self, config) -> None:
+        """ConfigManager change notification (reload + settings apply).
+
+        Hot-apply: the ONLY keys the running process genuinely re-reads live.
+        Everything else is restart-required — components hold constructed
+        references (taxonomy: settings_model.HOT_APPLY_KEYS)."""
+        b = config.barge_in
+        self.enable_barge_in = b.enabled
+        self._barge_min_confidence = b.min_confidence
+        self._barge_min_words = b.min_words
+        self._barge_min_chars = b.min_chars
+        logging.getLogger().setLevel(getattr(logging, config.logging.level.upper(), logging.INFO))
+        self.logger.info("⚙️ Config hot-applied: barge-in thresholds + log level")
+
     def _on_tts_interrupted(self) -> None:
         """Callback when TTS is interrupted by barge-in."""
         self._barge_in_count += 1
@@ -445,6 +475,10 @@ class SpectraVoiceAssistant:
                 # This prevents the mic from picking up our own TTS and triggering barge-in
                 self.voice_detector.mark_tts_start(response)
                 
+                if self.tts_muted:
+                    self.logger.info("🔇 Muted — response not spoken")
+                    self._update_status("Listening")
+                    return
                 self.tts.speak_async(response)
                 
                 # NOTE: We return here immediately!
@@ -526,7 +560,7 @@ class SpectraVoiceAssistant:
         # indicator so the status line reflects the dictation session.
         if self.dictation is not None:
             self.dictation.start()
-            self._dictation_hotkey_listener = self._start_dictation_hotkeys()
+            self._dictation_hotkey_listener = self._start_global_hotkeys()
         
         # Start on-screen status indicator (non-blocking)
         start_indicator("Listening")
@@ -627,18 +661,29 @@ class SpectraVoiceAssistant:
                 pass
         self.logger.info("👋 SpectraVoice stopped")
 
-    def _start_dictation_hotkeys(self) -> DictationHotkeyListener | None:
-        """Wire push-to-talk / mode-toggle hotkeys; degrade gracefully to
-        flag-only control when pynput or permissions are unavailable."""
+    def _start_global_hotkeys(self) -> DictationHotkeyListener | None:
+        """Wire ALL configured global hotkeys through the single pynput input
+        path (W2 D3, locked: pynput retained over a Quartz CGEventTap
+        migration — one input library, W1's graceful degradation carries
+        over; see io/hotkeys.py for the rationale). Degrades to HUD/CLI-only
+        control when pynput or permissions are unavailable."""
         hotkeys = self.config_manager.config.hotkeys
         ptt = parse_hotkey(hotkeys.push_to_talk)
         mode = parse_hotkey(hotkeys.dictation_mode)
-        if not ptt:
-            self.logger.warning("⚠️ No valid push_to_talk hotkey configured — push-to-talk unavailable")
+        commands: dict[str, tuple[frozenset[str], callable]] = {}
+        for name, spec, callback in (
+            ("mute", hotkeys.mute_toggle, self.toggle_mute),
+            ("pause_resume", hotkeys.pause_resume, self.toggle_pause),
+            ("quit", hotkeys.quit, self.request_shutdown),
+        ):
+            keys = parse_hotkey(spec)
+            if keys:
+                commands[name] = (keys, callback)
+        if not ptt and not commands:
+            self.logger.warning("⚠️ No valid global hotkeys configured — use the HUD menu / CLI flags")
             return None
-        listener = DictationHotkeyListener(self.dictation, ptt, mode)
-        listener_ok = listener.start()
-        return listener if listener_ok else None
+        listener = DictationHotkeyListener(self.dictation, ptt, mode, commands)
+        return listener if listener.start() else None
 
     def start_listening(self) -> None:
         """(Re)start the background listen loop (HUD menu toggle entry)."""
