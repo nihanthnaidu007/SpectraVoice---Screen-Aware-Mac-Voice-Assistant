@@ -46,6 +46,16 @@ ACTIVATION_MODES = ("push_to_talk", "vad")
 _HALLUCINATION_PATTERN = re.compile(r"^[\[(].*[\])]$")
 
 
+def is_likely_hallucination(text: str) -> bool:
+    """True when a transcript is a Whisper-on-silence artifact.
+
+    Bracketed placeholders like ``[BLANK_AUDIO]`` / ``(键盘音)`` — Whisper
+    hallucinating a description of silence instead of words. Public so the
+    meeting recorder (W3) applies exactly the same guard as dictation.
+    """
+    return bool(text) and bool(_HALLUCINATION_PATTERN.match(text.strip()))
+
+
 def expand_snippets(text: str, snippets: dict[str, str]) -> str:
     """Replace spoken snippet phrases ("comma", "new line", ...) in a transcript.
 
