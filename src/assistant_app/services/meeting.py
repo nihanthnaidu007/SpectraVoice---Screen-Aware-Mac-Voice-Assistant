@@ -282,34 +282,38 @@ class MeetingController:
             with self._lock:
                 self._in_flight_spoken_at = spoken_at
             self._transcribe_and_record(audio, spoken_at)
-            # Clear only on the normal path: when stop() interrupted us, the
-            # marker must survive for stop()'s gap accounting.
-            if not self._stop_event.is_set():
-                with self._lock:
-                    self._in_flight_spoken_at = None
 
     def _transcribe_and_record(self, audio, spoken_at: float) -> None:
         """Blocking transcription + incremental flush. Failure after the retry
         becomes a gap marker — the clip is accounted for either way."""
         if self._stop_event.is_set():
             return  # stop() owns this clip's accounting (a not_transcribed gap)
-        text: str | None = None
-        last_error: Exception | None = None
-        for attempt in range(_TRANSCRIBE_ATTEMPTS):
-            try:
-                text = self._transcribe(audio)
-                break
-            except Exception as exc:  # Whisper may raise anything; retry, then persist a gap
-                last_error = exc
-                self.logger.warning(f"⚠️ Meeting transcription attempt {attempt + 1} failed: {exc}")
-        if text is None:
-            self.logger.error(f"❌ Meeting transcription failed after {_TRANSCRIBE_ATTEMPTS} attempts: {last_error}")
-            self._record_gap(spoken_at, time.time(), meeting_store.GAP_TRANSCRIBE_FAILED)
-            return
-        cleaned = text.strip()
-        if not cleaned or is_likely_hallucination(cleaned):
-            return  # Whisper-on-silence artifact — not content, nothing lost
-        self._append_utterance(cleaned, spoken_at)
+        try:
+            text: str | None = None
+            last_error: Exception | None = None
+            for attempt in range(_TRANSCRIBE_ATTEMPTS):
+                try:
+                    text = self._transcribe(audio)
+                    break
+                except Exception as exc:  # Whisper may raise anything; retry, then persist a gap
+                    last_error = exc
+                    self.logger.warning(f"⚠️ Meeting transcription attempt {attempt + 1} failed: {exc}")
+            if text is None:
+                self.logger.error(f"❌ Meeting transcription failed after {_TRANSCRIBE_ATTEMPTS} attempts: {last_error}")
+                self._record_gap(spoken_at, time.time(), meeting_store.GAP_TRANSCRIBE_FAILED)
+                return
+            cleaned = text.strip()
+            if not cleaned or is_likely_hallucination(cleaned):
+                return  # Whisper-on-silence artifact — not content, nothing lost
+            self._append_utterance(cleaned, spoken_at)
+        finally:
+            # The outcome is settled (utterance, gap, or an intentional
+            # no-record) — stop() must never double-account this clip even if
+            # stop_event flipped mid-transcription. A clip abandoned by the
+            # head check above keeps its marker for stop() to gap.
+            with self._lock:
+                if self._in_flight_spoken_at == spoken_at:
+                    self._in_flight_spoken_at = None
 
     def _append_utterance(self, text: str, spoken_at: float) -> None:
         writer = self._writer

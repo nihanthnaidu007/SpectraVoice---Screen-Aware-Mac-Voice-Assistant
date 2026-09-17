@@ -132,6 +132,7 @@ class TestTranscriptionFidelity:
         gap = records[-1]
         assert gap["type"] == "gap"
         assert gap["reason"] == ms.GAP_TRANSCRIBE_FAILED
+        controller.stop()  # no daemon worker may outlive the test (cwd restore)
 
     def test_queue_overflow_becomes_gap_marker(self, tmp_path, monkeypatch):
         """Whisper slower than speech: the queue fills, the clip is not
@@ -158,6 +159,7 @@ class TestTranscriptionFidelity:
         records = read_records(controller.paths.meeting_dir)
         assert any(r["type"] == "gap" and r["reason"] == ms.GAP_OVERFLOW for r in records)
         release.set()
+        controller.stop()  # the worker holds queued + in-flight clips at exit
 
     def test_no_silent_loss_by_construction(self, tmp_path, monkeypatch):
         """Every clip must end as an utterance or a gap — count them."""
@@ -172,6 +174,7 @@ class TestTranscriptionFidelity:
         records = read_records(controller.paths.meeting_dir)
         accounted = sum(1 for r in records if r["type"] in {"utterance", "gap"})
         assert accounted == 5
+        controller.stop()  # no daemon worker may outlive the test (cwd restore)
 
     def test_pending_clips_drained_as_gaps_at_stop(self, tmp_path, monkeypatch):
         gate = threading.Event()

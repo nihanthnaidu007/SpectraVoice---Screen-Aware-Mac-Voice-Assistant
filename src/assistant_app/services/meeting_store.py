@@ -57,8 +57,10 @@ GAP_NOT_TRANSCRIBED = "not_transcribed"
 
 @dataclass(frozen=True)
 class MeetingPaths:
-    """Where one meeting's artifacts live (paths are absolute or cwd-relative
-    exactly as configured; the store never interprets them)."""
+    """Where one meeting's artifacts live. ``open_meeting`` resolves every
+    path to ABSOLUTE at open time: a later cwd change (a library call, a test
+    restoring directories around a still-running worker) can never redirect
+    an append into a different meeting's transcript."""
 
     meeting_dir: str
     transcript_path: str
@@ -102,6 +104,9 @@ def open_meeting(cfg, started_at: float) -> MeetingPaths:
         suffix += 1
         meeting_dir = os.path.join(root, f"{meeting_dir_name(started_at)}-{suffix}")
     os.makedirs(meeting_dir, exist_ok=True)
+    # Resolve to absolute NOW: every later append uses these strings directly,
+    # so the writer is immune to cwd changes after open (see MeetingPaths).
+    meeting_dir = os.path.abspath(meeting_dir)
     paths = MeetingPaths(
         meeting_dir=meeting_dir,
         transcript_path=os.path.join(meeting_dir, "transcript.jsonl"),
