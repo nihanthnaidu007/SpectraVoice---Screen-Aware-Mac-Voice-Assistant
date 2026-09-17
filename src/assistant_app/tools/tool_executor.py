@@ -1,19 +1,23 @@
 """Tool Executor Service - OpenAI Function Calling for macOS automation."""
 
 import json
-import subprocess
 import os
+import subprocess
 import time
-from typing import Any, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
-from assistant_app.utils.logging_config import get_logger
+from assistant_app.tools.command_sandbox import SandboxError, build_sandbox_argv
+from assistant_app.tools.escaping import applescript_escape
 from assistant_app.tools.mouse_controller import (
-    MouseController, MouseButton, MovementStyle, ScreenRegion,
-    get_mouse_controller
+    MouseButton,
+    MouseController,
+    MovementStyle,
+    get_mouse_controller,
 )
 from assistant_app.tools.smart_click import SmartClicker, get_smart_clicker
-
+from assistant_app.utils.logging_config import get_logger
 
 # OpenAI Function Schemas for GPT-5
 TOOL_SCHEMAS = [
@@ -435,55 +439,11 @@ BLOCKED_COMMANDS = [
 ]
 
 
-# Safe commands whitelist (commands allowed to run)
-SAFE_COMMAND_PREFIXES = [
-    "ls",
-    "pwd",
-    "date",
-    "whoami",
-    "echo",
-    "cat",
-    "head",
-    "tail",
-    "grep",
-    "find",
-    "which",
-    "where",
-    "wc",
-    "sort",
-    "uniq",
-    "df",
-    "du",
-    "ps",
-    "top -l 1",
-    "uptime",
-    "hostname",
-    "uname",
-    "sw_vers",
-    "system_profiler",
-    "diskutil list",
-    "networksetup",
-    "ifconfig",
-    "curl",
-    "wget",
-    "open",
-    "osascript",
-    "say",
-    "screencapture",
-    "defaults read",
-    "python",
-    "python3",
-    "pip list",
-    "pip3 list",
-    "npm list",
-    "node -v",
-    "git status",
-    "git log",
-    "git branch",
-    "git diff",
-    "brew list",
-    "brew info",
-]
+# The command allowlist lives in command_sandbox.py: a strict table of
+# binaries with fixed argv patterns, executed WITHOUT a shell. The old
+# SAFE_COMMAND_PREFIXES list was bypassable ("ls; curl … | sh" started with
+# "ls"), so prefix matching is gone entirely.
+
 
 
 @dataclass
@@ -500,7 +460,6 @@ class SafetyConfig:
     """Safety configuration for tool execution."""
     require_confirmation: bool = False
     blocked_commands: list[str] = field(default_factory=lambda: BLOCKED_COMMANDS.copy())
-    safe_command_prefixes: list[str] = field(default_factory=lambda: SAFE_COMMAND_PREFIXES.copy())
     max_command_timeout: int = 60
     enable_logging: bool = True
     dry_run: bool = False
@@ -709,8 +668,11 @@ class ToolExecutor:
         try:
             time.sleep(0.3)
             
-            # Use osascript for reliable Unicode text entry on macOS
-            escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+            # Use osascript for reliable Unicode text entry on macOS.
+            # The text is fully escaped before it reaches the AppleScript source,
+            # so quotes/newlines in user or LLM text cannot break out of the
+            # keystroke string literal.
+            escaped = applescript_escape(text)
             subprocess.run(
                 ["osascript", "-e", f'tell application "System Events" to keystroke "{escaped}"'],
                 capture_output=True, text=True, timeout=10
@@ -1018,8 +980,9 @@ class ToolExecutor:
             )
     
     def _handle_run_command(self, command: str, timeout: int = 30) -> ToolResult:
-        """Execute a terminal command with safety checks."""
-        # Safety check: block dangerous commands
+        """Execute an allowlisted command via sandboxed argv execution (no shell)."""
+        # Defense in depth: explicit blocklist on the raw payload (the sandbox
+        # allowlist below already excludes all of these).
         command_lower = command.lower()
         for blocked in self.safety.blocked_commands:
             if blocked.lower() in command_lower:
@@ -1030,14 +993,16 @@ class ToolExecutor:
                     error="Command blocked by safety filter"
                 )
         
-        # Safety check: verify command starts with safe prefix
-        is_safe = any(command_lower.startswith(safe.lower()) for safe in self.safety.safe_command_prefixes)
-        if not is_safe:
-            self.logger.warning(f"⚠️ Command not in safe list: {command}")
+        # Parse to argv against the strict allowlist. No shell=True, no string
+        # interpolation: metacharacters and non-allowlisted binaries are rejected.
+        try:
+            argv = build_sandbox_argv(command)
+        except SandboxError as e:
+            self.logger.warning(f"⚠️ Sandbox rejected command: {command!r} ({e})")
             return ToolResult(
                 success=False,
-                message=f"Command '{command.split()[0]}' is not in the allowed commands list",
-                error="Command not whitelisted"
+                message=str(e),
+                error="Command rejected by sandbox"
             )
         
         # Apply timeout limit
@@ -1045,8 +1010,7 @@ class ToolExecutor:
         
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -1058,7 +1022,7 @@ class ToolExecutor:
                 self.logger.info(f"✅ Command executed: {command[:50]}...")
                 return ToolResult(
                     success=True,
-                    message=f"Command executed successfully",
+                    message="Command executed successfully",
                     data={"output": output, "return_code": result.returncode}
                 )
             else:
