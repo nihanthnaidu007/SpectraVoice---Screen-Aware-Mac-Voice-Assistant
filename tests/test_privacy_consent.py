@@ -20,6 +20,100 @@ from assistant_app.llm.base import LLMProvider
 from assistant_app.llm.types import LLMConfig, LLMResponse
 
 
+class TestConsentObservers:
+    """W2 observer hook: state changes reach subscribers without polling."""
+
+    def test_observer_receives_effective_state_on_change(self):
+        gate = PrivacyConsent(consented=False)
+        seen = []
+        gate.add_observer(lambda consented, paused: seen.append((consented, paused)))
+
+        gate.grant_consent()
+        gate.pause()
+        gate.resume()
+        gate.revoke_consent()
+
+        assert seen == [(True, False), (True, True), (True, False), (False, False)]
+
+    def test_no_notification_without_state_change(self):
+        gate = PrivacyConsent(consented=True)
+        calls = []
+        gate.add_observer(lambda c, p: calls.append((c, p)))
+
+        gate.grant_consent()  # already granted
+        gate.pause()
+        gate.pause()  # already paused
+        gate.resume()
+        gate.resume()  # already resumed
+
+        assert calls == [(True, True), (True, False)]
+
+    def test_remove_observer_stops_notifications(self):
+        gate = PrivacyConsent()
+        calls = []
+        observer = lambda c, p: calls.append((c, p))
+        gate.add_observer(observer)
+        gate.grant_consent()
+        gate.remove_observer(observer)
+        gate.revoke_consent()
+
+        assert calls == [(True, False)]
+
+    def test_broken_observer_does_not_break_the_gate(self):
+        """The privacy gate must keep gating even if a HUD callback crashes."""
+        gate = PrivacyConsent()
+
+        def explode(consented, paused):
+            raise RuntimeError("observer bug")
+
+        gate.add_observer(explode)
+        gate.grant_consent()
+        gate.pause()
+
+        assert gate.consented is True
+        assert gate.paused is True
+        assert gate.screen_upload_allowed is False
+
+    def test_observer_reads_fresh_state(self):
+        gate = PrivacyConsent()
+        observed = []
+        gate.add_observer(lambda c, p: observed.append(gate.screen_upload_allowed))
+        gate.grant_consent()
+        gate.pause()
+
+        assert observed == [True, False]
+
+    def test_observer_runs_outside_the_gate_lock(self):
+        """An observer may call gate properties — no deadlock (lock is released
+        before callbacks run)."""
+        gate = PrivacyConsent()
+        results = []
+        gate.add_observer(lambda c, p: results.append(gate.paused))
+        gate.pause()
+
+        assert results == [True]
+
+    def test_threaded_mutations_notify_exactly_on_change(self):
+        gate = PrivacyConsent(consented=True)
+        count = []
+        gate.add_observer(lambda c, p: count.append(1))
+
+        def churn():
+            for _ in range(200):
+                gate.pause()
+                gate.resume()
+
+        threads = [threading.Thread(target=churn) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # 1600 mutations (4 threads x 200 x pause+resume), each a real change:
+        # every one of them must notify.
+        assert len(count) == 1600
+
+
 class RecordingProvider(LLMProvider):
     """Fake provider that records which generation path was used."""
 
@@ -150,9 +244,11 @@ def test_consent_gate_is_thread_safe():
         t.start()
     try:
         for _ in range(2000):
-            allowed = consent.screen_upload_allowed
-            # Invariant: upload is allowed iff consented and not paused.
-            assert allowed == (consent.consented and not consent.paused)
+            # Atomic snapshot: asserting across three separate property reads
+            # would be a torn read (state can flip between acquisitions) — a
+            # gate bug the snapshot is required to detect.
+            consented, paused, allowed = consent.snapshot()
+            assert allowed == (consented and not paused)
     finally:
         stop.set()
         for t in threads:
