@@ -577,6 +577,17 @@ class ConfigManager:
                 'refresh_interval': cfg.screen.refresh_interval,
                 'cache_duration': cfg.screen.cache_duration,
             },
+            'llm': {
+                'provider': cfg.llm.provider,
+                'cloud_model': cfg.llm.cloud_model,
+                'ollama_url': cfg.llm.ollama_url,
+                'ollama_model': cfg.llm.ollama_model,
+                'max_tokens': cfg.llm.max_tokens,
+                'temperature': cfg.llm.temperature,
+                'timeout': cfg.llm.timeout,
+                'enable_vision': cfg.llm.enable_vision,
+                'enable_tools': cfg.llm.enable_tools,
+            },
             'api': {
                 'openai_model': cfg.api.openai_model,
                 'max_tokens': cfg.api.max_tokens,
@@ -589,12 +600,14 @@ class ConfigManager:
                 'push_to_talk': cfg.hotkeys.push_to_talk,
                 'pause_resume': cfg.hotkeys.pause_resume,
                 'quit': cfg.hotkeys.quit,
+                'dictation_mode': cfg.hotkeys.dictation_mode,
             },
             'logging': {
                 'level': cfg.logging.level,
                 'file': cfg.logging.file,
                 'max_size_mb': cfg.logging.max_size_mb,
                 'backup_count': cfg.logging.backup_count,
+                'format': cfg.logging.format,
             },
             'safety': {
                 'dry_run': cfg.safety.dry_run,
@@ -638,6 +651,15 @@ class ConfigManager:
                 'insert_enter': cfg.dictation.insert_enter,
                 'persist_audio': cfg.dictation.persist_audio,
                 'audio_dir': cfg.dictation.audio_dir,
+            },
+            'modes': {
+                name: {
+                    'screen_quality': profile.screen_quality,
+                    'screen_scale': profile.screen_scale,
+                    'whisper_model': profile.whisper_model,
+                    'max_tokens': profile.max_tokens,
+                }
+                for name, profile in cfg.modes.items()
             },
         }
     
