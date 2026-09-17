@@ -45,6 +45,8 @@ from assistant_app.hud.state import (
     Privacy,
     icon_text,
     listen_item_label,
+    meeting_item_label,
+    meeting_pause_item_label,
     menu_summary,
     pause_item_enabled,
     pause_item_label,
@@ -97,6 +99,12 @@ class MenuBarHUD(NSObject):
         if self._pause_item is not None:
             self._pause_item.setTitle_(pause_item_label(snapshot.privacy))
             self._pause_item.setEnabled_(pause_item_enabled(snapshot.privacy))
+        if self._meeting_item is not None:
+            self._meeting_item.setTitle_(meeting_item_label(snapshot.meeting))
+        if self._meeting_pause_item is not None:
+            self._meeting_pause_item.setTitle_(meeting_pause_item_label(snapshot.meeting))
+            # Pause is meaningful only while a meeting is being recorded.
+            self._meeting_pause_item.setEnabled_(snapshot.meeting is not None)
 
     # === NSStatusItem / menu construction (main thread) ===
 
@@ -120,6 +128,13 @@ class MenuBarHUD(NSObject):
 
         self._listen_item = self._add_item(menu, listen_item_label(False), "onListenToggle:")
         self._pause_item = self._add_item(menu, pause_item_label(Privacy.OFF), "onPauseToggle:")
+        self._meeting_item = self._add_item(menu, meeting_item_label(None), "onMeetingToggle:")
+        self._meeting_pause_item = self._add_item(
+            menu, meeting_pause_item_label(None), "onMeetingPause:"
+        )
+        # A meeting with no consent gate can never start — the item must not
+        # offer the action (D2: the HUD reflects the gate, never bypasses it).
+        self._meeting_pause_item.setEnabled_(False)
         self._dictation_item = self._add_item(
             menu, f"Dictation Mode: {self._actions.current_dictation_mode()}", "onDictationMode:"
         )
@@ -153,6 +168,12 @@ class MenuBarHUD(NSObject):
         # HUD state) — cheap direct update keeps the label honest immediately.
         if self._dictation_item is not None:
             self._dictation_item.setTitle_(f"Dictation Mode: {self._actions.current_dictation_mode()}")
+
+    def onMeetingToggle_(self, sender) -> None:
+        self._actions.toggle_meeting()
+
+    def onMeetingPause_(self, sender) -> None:
+        self._actions.pause_meeting()
 
     def onSettings_(self, sender) -> None:
         self._actions.open_settings()

@@ -136,25 +136,28 @@ class TestTranscriptionFidelity:
     def test_queue_overflow_becomes_gap_marker(self, tmp_path, monkeypatch):
         """Whisper slower than speech: the queue fills, the clip is not
         transcribed — but a gap marker with the reason lands in the transcript."""
-        gate = threading.Event()
+        entered = threading.Event()  # worker is inside transcribe
+        release = threading.Event()  # test lets transcribe finish
 
         def slow_transcribe(audio):
-            gate.wait(timeout=5)
+            entered.set()
+            release.wait(timeout=5)
             return "late"
 
         controller = make_controller(tmp_path, monkeypatch, transcribe=slow_transcribe)
-        cfg_depth_gate = controller._queue  # depth 256 default — shrink for the test
-        cfg_depth_gate.maxsize = 1
+        controller._queue.maxsize = 1  # shrink from the 256 default for the test
         controller.start()
-        # Worker is stuck in slow_transcribe after the first clip; fill the queue.
+        # Deterministic fill: wait until clip1 is CONSUMED (blocked inside the
+        # worker's transcribe call, not merely queued) so clip2 fills the
+        # queue and clip3 overflows exactly once — no scheduling dependence.
         controller.on_clip(FakeClip(), spoken_at=1000.0)
-        assert wait_until(lambda: controller._queue.qsize() == 1)
+        assert entered.wait(timeout=5), "worker never entered transcribe"
         controller.on_clip(FakeClip(), spoken_at=1001.0)  # queued
-        controller.on_clip(FakeClip(), spoken_at=1002.0)  # overflow
+        controller.on_clip(FakeClip(), spoken_at=1002.0)  # overflow (exactly once)
         assert wait_until(lambda: controller.overflow_count == 1)
         records = read_records(controller.paths.meeting_dir)
         assert any(r["type"] == "gap" and r["reason"] == ms.GAP_OVERFLOW for r in records)
-        gate.set()
+        release.set()
 
     def test_no_silent_loss_by_construction(self, tmp_path, monkeypatch):
         """Every clip must end as an utterance or a gap — count them."""
