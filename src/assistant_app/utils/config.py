@@ -1,6 +1,7 @@
 """Configuration Management System with YAML/JSON support."""
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -242,10 +243,53 @@ class ConfigManager:
     
     ENV_PREFIX = "VA_"  # SpectraVoice environment variable prefix
     
+
+    ENV_MAPPINGS = {  # env override table: ENV_VAR -> (section, field | None)
+        # Voice
+        f"{ENV_PREFIX}VOICE_TTS_VOICE": ("voice", "tts_voice"),
+        f"{ENV_PREFIX}VOICE_WHISPER_MODEL": ("voice", "whisper_model"),
+        f"{ENV_PREFIX}VOICE_LANGUAGE": ("voice", "language"),
+        
+        # Screen
+        f"{ENV_PREFIX}SCREEN_QUALITY": ("screen", "quality"),
+        f"{ENV_PREFIX}SCREEN_SCALE": ("screen", "scale_factor"),
+        
+        # API
+        f"{ENV_PREFIX}API_MODEL": ("api", "openai_model"),
+        f"{ENV_PREFIX}API_MAX_TOKENS": ("api", "max_tokens"),
+        f"{ENV_PREFIX}API_TEMPERATURE": ("api", "temperature"),
+        
+        # Logging
+        f"{ENV_PREFIX}LOG_LEVEL": ("logging", "level"),
+        f"{ENV_PREFIX}LOG_FILE": ("logging", "file"),
+        
+        # Barge-in
+        f"{ENV_PREFIX}BARGE_IN_ENABLED": ("barge_in", "enabled"),
+        f"{ENV_PREFIX}BARGE_IN_MIN_CONFIDENCE": ("barge_in", "min_confidence"),
+        
+        # Microphone / TTS devices
+        f"{ENV_PREFIX}MICROPHONE_INPUT_DEVICE": ("microphone", "input_device"),
+        f"{ENV_PREFIX}MICROPHONE_ENERGY_THRESHOLD": ("microphone", "energy_threshold"),
+        f"{ENV_PREFIX}TTS_OUTPUT_DEVICE": ("tts", "output_device"),
+
+        # Supervisor (auto-restart)
+        f"{ENV_PREFIX}SUPERVISOR_ENABLED": ("supervisor", "enabled"),
+        f"{ENV_PREFIX}SUPERVISOR_MAX_RESTARTS": ("supervisor", "max_restarts"),
+
+        # Dictation (W1)
+        f"{ENV_PREFIX}DICTATION_ENABLED": ("dictation", "enabled"),
+        f"{ENV_PREFIX}DICTATION_ACTIVATION": ("dictation", "activation"),
+        f"{ENV_PREFIX}DICTATION_PERSIST_AUDIO": ("dictation", "persist_audio"),
+        
+        # Mode
+        f"{ENV_PREFIX}MODE": ("mode", None),
+        f"{ENV_PREFIX}DEBUG": ("debug", None),
+    }
     def __init__(self, config_path: str | Path | None = None):
         self.config_path = self._find_config_file(config_path)
         self._config: AssistantConfig | None = None
         self._raw_config: dict = {}
+        self._reload_callbacks: list[Callable[[AssistantConfig], None]] = []
         self.load()
     
     def _find_config_file(self, config_path: str | Path | None) -> Path | None:
@@ -301,47 +345,7 @@ class ConfigManager:
         Environment variables use format: VA_SECTION_KEY
         Example: VA_VOICE_TTS_VOICE=nova
         """
-        env_mappings = {
-            # Voice
-            f"{self.ENV_PREFIX}VOICE_TTS_VOICE": ("voice", "tts_voice"),
-            f"{self.ENV_PREFIX}VOICE_WHISPER_MODEL": ("voice", "whisper_model"),
-            f"{self.ENV_PREFIX}VOICE_LANGUAGE": ("voice", "language"),
-            
-            # Screen
-            f"{self.ENV_PREFIX}SCREEN_QUALITY": ("screen", "quality"),
-            f"{self.ENV_PREFIX}SCREEN_SCALE": ("screen", "scale_factor"),
-            
-            # API
-            f"{self.ENV_PREFIX}API_MODEL": ("api", "openai_model"),
-            f"{self.ENV_PREFIX}API_MAX_TOKENS": ("api", "max_tokens"),
-            f"{self.ENV_PREFIX}API_TEMPERATURE": ("api", "temperature"),
-            
-            # Logging
-            f"{self.ENV_PREFIX}LOG_LEVEL": ("logging", "level"),
-            f"{self.ENV_PREFIX}LOG_FILE": ("logging", "file"),
-            
-            # Barge-in
-            f"{self.ENV_PREFIX}BARGE_IN_ENABLED": ("barge_in", "enabled"),
-            f"{self.ENV_PREFIX}BARGE_IN_MIN_CONFIDENCE": ("barge_in", "min_confidence"),
-            
-            # Microphone / TTS devices
-            f"{self.ENV_PREFIX}MICROPHONE_INPUT_DEVICE": ("microphone", "input_device"),
-            f"{self.ENV_PREFIX}MICROPHONE_ENERGY_THRESHOLD": ("microphone", "energy_threshold"),
-            f"{self.ENV_PREFIX}TTS_OUTPUT_DEVICE": ("tts", "output_device"),
-
-            # Supervisor (auto-restart)
-            f"{self.ENV_PREFIX}SUPERVISOR_ENABLED": ("supervisor", "enabled"),
-            f"{self.ENV_PREFIX}SUPERVISOR_MAX_RESTARTS": ("supervisor", "max_restarts"),
-
-            # Dictation (W1)
-            f"{self.ENV_PREFIX}DICTATION_ENABLED": ("dictation", "enabled"),
-            f"{self.ENV_PREFIX}DICTATION_ACTIVATION": ("dictation", "activation"),
-            f"{self.ENV_PREFIX}DICTATION_PERSIST_AUDIO": ("dictation", "persist_audio"),
-            
-            # Mode
-            f"{self.ENV_PREFIX}MODE": ("mode", None),
-            f"{self.ENV_PREFIX}DEBUG": ("debug", None),
-        }
+        env_mappings = self.ENV_MAPPINGS
         
         for env_var, (section, key) in env_mappings.items():
             value = os.environ.get(env_var)
@@ -435,9 +439,41 @@ class ConfigManager:
         return self._config  # type: ignore
     
     def reload(self) -> AssistantConfig:
-        """Reload configuration from file."""
+        """Reload configuration from file and notify registered consumers.
+
+        W2 makes the reload path functional: callbacks registered via
+        on_reload() run after the fresh config is in place (settings UI
+        hot-apply, HUD). Callback failures are isolated — one bad consumer
+        cannot break the reload or its siblings.
+        """
         logger.info("🔄 Reloading configuration...")
-        return self.load()
+        config = self.load()
+        self.notify_config_changed(config)
+        return config
+
+    def on_reload(self, callback: Callable[[AssistantConfig], None]) -> None:
+        """Register a callback invoked after every successful reload()."""
+        self._reload_callbacks.append(callback)
+
+    def notify_config_changed(self, config: AssistantConfig) -> None:
+        """Dispatch config-change notifications with failure isolation."""
+        for callback in tuple(self._reload_callbacks):
+            try:
+                callback(config)
+            except Exception:
+                logger.exception("Config reload callback failed — continuing")
+
+    @classmethod
+    def env_mapping_table(cls) -> dict[tuple[str, str], str]:
+        """{(section, field): ENV_VAR} reverse lookup for the settings UI.
+        Top-level keys (mode, debug) use section ""."""
+        table: dict[tuple[str, str], str] = {}
+        for env_var, (section, key) in cls.ENV_MAPPINGS.items():
+            if key is None:
+                table[("", section)] = env_var
+            else:
+                table[(section, key)] = env_var
+        return table
     
     def get(self, key: str, default: Any = None) -> Any:
         """
