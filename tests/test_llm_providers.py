@@ -515,6 +515,11 @@ def test_integration_main_config_parsing():
     print("\n🔗 Testing Integration: main.py Config Parsing...")
     
     import main
+    from assistant_app.utils.config import AssistantConfig
+    
+    # W1: get_llm_config takes the loaded AssistantConfig; defaults have
+    # llm.provider="auto" so CLI flags / env still decide, as before.
+    cfg = AssistantConfig()
     
     # Create mock args
     @dataclass
@@ -527,32 +532,32 @@ def test_integration_main_config_parsing():
     
     # Test --local flag
     args = MockArgs(local=True)
-    config = main.get_llm_config(args)
+    config = main.get_llm_config(args, cfg)
     assert config.provider == ProviderType.LOCAL
     print("  ✅ --local flag works")
     
     # Test --cloud flag
     args = MockArgs(cloud=True)
-    config = main.get_llm_config(args)
+    config = main.get_llm_config(args, cfg)
     assert config.provider == ProviderType.CLOUD
     print("  ✅ --cloud flag works")
     
     # Test LLM_PROVIDER env var
     with patch.dict(os.environ, {"LLM_PROVIDER": "local"}, clear=False):
         args = MockArgs()  # No flags
-        config = main.get_llm_config(args)
+        config = main.get_llm_config(args, cfg)
         assert config.provider == ProviderType.LOCAL
         print("  ✅ LLM_PROVIDER env var works")
     
     # Test model auto-detection (GPT‑5 model -> cloud)
     args = MockArgs(model="gpt-5.1")
-    config = main.get_llm_config(args)
+    config = main.get_llm_config(args, cfg)
     assert config.provider == ProviderType.CLOUD
     print("  ✅ GPT model auto-detected as cloud")
     
     # Test model auto-detection (other model -> local)
     args = MockArgs(model="llama3.2")
-    config = main.get_llm_config(args)
+    config = main.get_llm_config(args, cfg)
     assert config.provider == ProviderType.LOCAL
     print("  ✅ Non-GPT model auto-detected as local")
     

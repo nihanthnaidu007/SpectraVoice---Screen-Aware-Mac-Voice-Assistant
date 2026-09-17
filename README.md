@@ -427,6 +427,37 @@ If tkinter is not installed, SpectraVoice can still run without the indicator.
 
 ---
 
+## Configuration (config.yaml)
+
+All runtime settings live in `config.yaml` at the repo root (or pass `--config <path>`).
+Every key has a built-in default, unknown keys are warned about and ignored, and any
+`VA_<SECTION>_<KEY>` environment variable overrides the file (e.g. `VA_VOICE_WHISPER_MODEL=tiny`,
+`VA_MICROPHONE_INPUT_DEVICE=2`). Values that are invalid per `validate()` log warnings at
+startup and fall back to defaults — startup never crashes on a bad config file.
+
+| Section | What it controls |
+|---|---|
+| `mode` | Default run mode when no `--gui` / `--minimal` flag is given (`terminal`, `gui`, `minimal`) |
+| `modes.<name>` | Per-mode overrides: `screen_quality`, `screen_scale`, `whisper_model`, `max_tokens` |
+| `voice` | TTS voice, Whisper model, language, `speech_rate` (0.25–4.0) |
+| `screen` | Capture `quality` (1–100), `scale_factor` (0.1–1.0), `refresh_interval`, `cache_duration` |
+| `barge_in` | Interruption behavior: `enabled`, `min_confidence` (0–1), `min_words`, `min_chars`, timeouts |
+| `microphone` | `input_device` index (`null` = system default), `energy_threshold`, `pause_threshold`, ambient-noise seconds, `inline_transcription` |
+| `tts` | `output_device` index (`null` = system default), `hd_quality` |
+| `llm` | `provider`: `cloud`, `local`, or `auto` (interactive/GUI selection, the default) |
+| `logging` | Log `level`, `file`, `max_size_mb`, `backup_count` |
+
+**Audio devices:** find your device indices with `python scripts/list_audio_devices.py`, then set
+`microphone.input_device` / `tts.output_device`. A configured device that disappears (e.g. an
+unplugged headset) falls back to the system default with a log warning instead of crashing.
+
+**Latency:** Whisper transcription runs on a background worker by default — the recognizer
+loop hands utterances off immediately instead of blocking for the full transcription time.
+Set `microphone.inline_transcription: true` to restore the pre-W1 inline behavior.
+Measure the difference with `python scripts/benchmark_transcription_latency.py`.
+
+---
+
 ## Troubleshooting (quick)
 
 **Microphone not working**
@@ -532,10 +563,11 @@ pytest tests/ -v
 
 | Flag              | Description                  | Default  |
 |-------------------|------------------------------|----------|
+| `--config`        | Path to config file          | `config.yaml` in repo root |
 | `--gui`           | Show GUI status window       | Off      |
 | `--minimal`       | Minimal mode (fastest)       | Off      |
 | `--debug`         | Enable debug logging         | Off      |
-| `--voice`         | TTS voice selection          | shimmer  |
+| `--voice`         | TTS voice selection          | `voice.tts_voice` from config (shimmer) |
 | `--whisper-model` | Whisper model size           | base     |
 
 ---

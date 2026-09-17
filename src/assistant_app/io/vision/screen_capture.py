@@ -11,9 +11,12 @@ from assistant_app.utils.logging_config import get_logger
 
 
 class ScreenCapture:
-    def __init__(self, quality: int = 80, scale_factor: float = 0.8):
+    def __init__(self, quality: int = 80, scale_factor: float = 0.8,
+                 refresh_interval: float = 0.2, cache_duration: float = 1.0):
         self.quality = quality
         self.scale_factor = scale_factor
+        self.refresh_interval = refresh_interval
+        self.cache_duration = cache_duration
         self.screenshot = None
         self.encoded_cache = None
         self.cache_timestamp = 0
@@ -36,7 +39,7 @@ class ScreenCapture:
         from PIL import Image, ImageGrab
         
         last_capture = 0
-        interval = 0.2
+        interval = self.refresh_interval
         
         while self.running and not self.stop_event.is_set():
             if time.time() - last_capture < interval:
@@ -77,7 +80,7 @@ class ScreenCapture:
             if self.screenshot is None:
                 return None
                 
-            if self.encoded_cache and time.time() - self.cache_timestamp < 1.0:
+            if self.encoded_cache and time.time() - self.cache_timestamp < self.cache_duration:
                 return self.encoded_cache
             
             try:

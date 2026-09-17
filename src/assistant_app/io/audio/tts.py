@@ -1,4 +1,9 @@
-"""Text-to-Speech Service - OpenAI TTS with PyAudio playback.
+"""Text-to-Speech Service - OpenAI TTS streamed to PyAudio playback.
+
+Synthesis streams: playback starts as soon as the first pre-buffered PCM
+chunks arrive over the network instead of waiting for the full response
+(previously the entire utterance — hard-capped at 500 chars — was synthesized
+before a single sample played).
 
 Supports barge-in interruption via the stop() method.
 Runs playback in a background thread to allow concurrent listening.
@@ -9,17 +14,25 @@ Thread Safety:
 - _lock: Ensures only one speak operation at a time
 
 The stop() method can be safely called from any thread at any time.
+PyAudio is imported lazily so this module stays importable (and unit-testable)
+on machines without PortAudio installed.
 """
 
 import threading
 import time
 from collections.abc import Callable
 from enum import Enum
+from typing import Any
 
 import openai
-from pyaudio import PyAudio, paInt16
 
 from assistant_app.utils.logging_config import get_logger
+
+try:
+    from pyaudio import paInt16  # 16-bit signed int samples
+except ImportError:  # PortAudio not installed (CI, unit tests) — only needed at playback time
+    # Part of PortAudio's stable ABI (portaudio.h), not a pyaudio implementation detail.
+    paInt16 = 8
 
 
 class TTSState(Enum):
@@ -56,9 +69,13 @@ class TextToSpeech:
     # Pre-buffer before starting playback to prevent initial stuttering
     PRE_BUFFER_CHUNKS = 3  # Buffer ~500ms of audio before starting playback
     
-    def __init__(self, voice: str = "shimmer", hd_quality: bool = True):
+    def __init__(self, voice: str = "shimmer", hd_quality: bool = True, output_device: int | None = None,
+                 speech_rate: float = 1.0):
         self.voice = voice
         self.hd_quality = hd_quality  # Use tts-1-hd for smoother, higher quality voice
+        self.output_device = output_device  # PyAudio output device index; None = system default
+        self.speech_rate = speech_rate  # Playback speed multiplier (OpenAI TTS 0.25-4.0)
+        self._output_device_failed = False  # Sticky: configured device failed once, use default
         self.logger = get_logger(__name__)
         
         # === THREAD-SAFE STATE ===
@@ -87,10 +104,57 @@ class TextToSpeech:
         self._barge_in_count = 0
         self._last_barge_in_time: float = 0.0
         
-    def _get_audio_context(self) -> PyAudio:
+    def _get_audio_context(self):
         if self._audio_context is None:
+            # Lazy import: keeps this module importable without PortAudio (CI, unit tests).
+            from pyaudio import PyAudio
+
             self._audio_context = PyAudio()
         return self._audio_context
+
+    def _open_player(self):
+        """Open a 16-bit PCM output stream, honoring the configured output device.
+
+        Falls back to the system default device (once, then sticky) when the
+        configured output device index is missing or fails — e.g. a Bluetooth
+        headset that disconnected mid-session.
+        """
+        def default_stream():
+            return self._get_audio_context().open(
+                format=paInt16,
+                channels=self.CHANNELS,
+                rate=self.SAMPLE_RATE,
+                output=True,
+                frames_per_buffer=8192,
+            )
+
+        if self.output_device is None or self._output_device_failed:
+            return default_stream()
+
+        try:
+            device_info = self._get_audio_context().get_device_info_by_index(self.output_device)
+            self.logger.info(
+                f"🔊 Using configured output device [{self.output_device}]: {device_info.get('name', '?')}"
+            )
+        except OSError as e:
+            self.logger.warning(f"⚠️ Configured output device {self.output_device} not found ({e}); using system default")
+            self._output_device_failed = True
+            return default_stream()
+
+        try:
+            return self._get_audio_context().open(
+                format=paInt16,
+                channels=self.CHANNELS,
+                rate=self.SAMPLE_RATE,
+                output=True,
+                output_device_index=self.output_device,
+                frames_per_buffer=8192,
+            )
+        except OSError as e:
+            self.logger.warning(f"⚠️ Output device {self.output_device} failed ({e}); falling back to system default")
+            self._output_device_failed = True
+            return default_stream()
+
         
     def speak(self, text: str) -> bool:
         """
@@ -242,92 +306,25 @@ class TextToSpeech:
                 self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason={end_reason})")
                 return False
             
-            text_to_speak = text[:500] if len(text) > 500 else text
-            
-            # Use tts-1-hd for smoother, more natural sounding voice
+            # Full text — the 500-char cap is gone; synthesis streams, so long
+            # responses start playing while later segments are still generated.
             tts_model = "tts-1-hd" if self.hd_quality else "tts-1"
             
-            response = openai.audio.speech.create(
-                model=tts_model,
-                voice=self.voice,
-                response_format="pcm",
-                input=text_to_speak,
-            )
-            
-            # Check for interrupt after API call - use Event for speed
-            if self._stop_event.is_set():
-                end_reason = "cancelled_after_synthesis"
-                self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason={end_reason})")
-                return False
-            
-            audio_data = response.content
-            
-            if not audio_data:
-                end_reason = "empty_audio"
-                self.logger.warning(f"⚠️ TTS end (id={utterance_id}, reason={end_reason})")
-                return True
-            
-            audio_bytes = len(audio_data)
-            audio_duration_ms = (audio_bytes / 2) / self.SAMPLE_RATE * 1000  # 16-bit = 2 bytes per sample
-            
-            # Now playing audio - thread-safe state transition
-            with self._state_lock:
-                self._state = TTSState.PLAYING
-            self.logger.debug(f"🔊 TTS playback started (id={utterance_id}, audio={audio_bytes} bytes, ~{audio_duration_ms:.0f}ms)")
-            
-            audio_ctx = self._get_audio_context()
-            # Use larger buffer for smoother playback (8192 frames = ~340ms buffer)
-            player = audio_ctx.open(
-                format=paInt16,
-                channels=self.CHANNELS,
-                rate=self.SAMPLE_RATE,
-                output=True,
-                frames_per_buffer=8192,
-            )
-            
-            # Store player reference for external interruption
-            with self._playback_lock:
-                self._current_player = player
-            
-            # Pre-buffer audio chunks before starting playback for smooth start
-            chunks_played = 0
-            total_chunks = (len(audio_data) + self.CHUNK_SIZE - 1) // self.CHUNK_SIZE
-            
-            # Collect chunks into a list first
-            all_chunks = []
-            for i in range(0, len(audio_data), self.CHUNK_SIZE):
-                chunk = audio_data[i:i + self.CHUNK_SIZE]
-                if chunk:
-                    all_chunks.append(chunk)
-            
-            # Play audio in chunks, checking for interrupt periodically (not every chunk)
-            # This reduces overhead and improves smoothness
-            interrupt_check_interval = 2  # Check every 2 chunks (~340ms)
-            
-            for idx, chunk in enumerate(all_chunks):
-                # === INTERRUPT CHECK (periodic, not every chunk) ===
-                if idx % interrupt_check_interval == 0 and self._stop_event.is_set():
-                    end_reason = "barge_in"
-                    self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason={end_reason}, played={chunks_played}/{total_chunks} chunks)")
-                    was_interrupted = True
-                    break
-                
-                try:
-                    player.write(chunk)
-                    chunks_played += 1
-                except OSError as e:
-                    # Stream was stopped externally
-                    end_reason = f"playback_error: {e}"
-                    self.logger.warning(f"⚠️ TTS end (id={utterance_id}, reason={end_reason})")
-                    was_interrupted = True
-                    break
+            was_interrupted, bytes_received, bytes_played, player = self._stream_to_player(text, tts_model, utterance_id)
             
             if not was_interrupted:
-                end_reason = "completed"
-                self.logger.info(f"✅ TTS end (id={utterance_id}, reason={end_reason}, played={chunks_played}/{total_chunks} chunks)")
+                if bytes_received == 0:
+                    end_reason = "empty_audio"
+                    self.logger.warning(f"⚠️ TTS end (id={utterance_id}, reason={end_reason})")
+                    return True
+                audio_duration_ms = (bytes_received / 2) / self.SAMPLE_RATE * 1000  # 16-bit = 2 bytes/sample
+                self.logger.info(
+                    f"✅ TTS end (id={utterance_id}, reason=completed, received={bytes_received} bytes, "
+                    f"played={bytes_played}, ~{audio_duration_ms:.0f}ms)"
+                )
             
             return not was_interrupted
-            
+
         except openai.APIError as e:
             end_reason = f"api_error: {e}"
             self.logger.error(f"❌ TTS end (id={utterance_id}, reason={end_reason})")
@@ -377,6 +374,88 @@ class TextToSpeech:
                 except Exception:
                     pass
     
+    def _stream_to_player(self, text: str, tts_model: str, utterance_id: int) -> tuple[bool, int, int, Any]:
+        """Stream synthesis and play PCM chunks as they arrive.
+
+        Opens the player once ~500ms is pre-buffered (or at end-of-stream for
+        short responses), so speech starts before synthesis completes.
+
+        Returns:
+            (was_interrupted, bytes_received, bytes_played, player) — player is
+            returned so _speak_impl's finally block can close it.
+        """
+        player = None
+        pre_buffer: list[bytes] = []
+        bytes_received = 0
+        bytes_played = 0
+        was_interrupted = False
+
+        def play_chunk(dst, chunk: bytes) -> bool:
+            nonlocal was_interrupted
+            try:
+                dst.write(chunk)
+                return True
+            except OSError as e:
+                was_interrupted = True
+                if self._stop_event.is_set():
+                    self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason=barge_in_oserror)")
+                else:
+                    self.logger.warning(f"⚠️ TTS end (id={utterance_id}, reason=playback_error: {e})")
+                return False
+
+        def start_playback() -> None:
+            nonlocal player, pre_buffer, bytes_played
+            player = self._open_player()
+            with self._playback_lock:
+                self._current_player = player
+            with self._state_lock:
+                self._state = TTSState.PLAYING
+            self.logger.debug(f"🔊 TTS playback started (id={utterance_id})")
+            for buffered in pre_buffer:
+                if not play_chunk(player, buffered):
+                    break
+                bytes_played += len(buffered)
+            pre_buffer = []
+
+        stream_ctx = openai.audio.speech.with_streaming_response.create(
+            model=tts_model,
+            voice=self.voice,
+            response_format="pcm",
+            input=text,
+            speed=self.speech_rate,
+        )
+
+        with stream_ctx as response:
+            if self._stop_event.is_set():
+                was_interrupted = True
+                self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason=cancelled_after_synthesis)")
+                return was_interrupted, bytes_received, bytes_played, player
+
+            for chunk in response.iter_bytes(chunk_size=self.CHUNK_SIZE):
+                if not chunk:
+                    continue
+                bytes_received += len(chunk)
+                if self._stop_event.is_set():
+                    was_interrupted = True
+                    self.logger.info(f"⏹️ TTS end (id={utterance_id}, reason=barge_in)")
+                    break
+                if player is None:
+                    pre_buffer.append(chunk)
+                    if len(pre_buffer) >= self.PRE_BUFFER_CHUNKS:
+                        start_playback()
+                        if was_interrupted:
+                            break
+                else:
+                    if not play_chunk(player, chunk):
+                        break
+                    bytes_played += len(chunk)
+
+            # Short responses: fewer chunks arrived than the pre-buffer target.
+            if player is None and pre_buffer and not was_interrupted:
+                start_playback()
+
+        return was_interrupted, bytes_received, bytes_played, player
+
     def _reinit_audio(self) -> None:
         try:
             if self._audio_context:
@@ -388,6 +467,8 @@ class TextToSpeech:
         time.sleep(0.2)
         
         try:
+            from pyaudio import PyAudio
+
             self._audio_context = PyAudio()
             self.logger.debug("🔄 Audio context reinitialized")
         except Exception as e:

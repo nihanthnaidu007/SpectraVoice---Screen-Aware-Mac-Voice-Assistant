@@ -15,6 +15,8 @@ from assistant_app.io.audio.tts import TextToSpeech
 from assistant_app.io.audio.voice_detector import SmartVoiceDetector
 from assistant_app.io.indicator import start_indicator, stop_indicator, update_status
 from assistant_app.io.vision.screen_capture import ScreenCapture
+from assistant_app.services.transcription import TranscriptionWorker
+from assistant_app.utils.config import ConfigManager, get_config_manager
 from assistant_app.utils.logging_config import get_logger
 
 # GUI mode imports (lazy loaded)
@@ -37,10 +39,12 @@ class PerformanceMetrics:
     api_response_time: float = 0.0
     tts_time: float = 0.0
     total_latency: float = 0.0
+    handback_time: float = 0.0  # time the audio callback held the recognizer thread
     interaction_count: int = 0
     
     def reset(self) -> None:
-        self.transcription_time = self.api_response_time = self.tts_time = self.total_latency = 0.0
+        self.transcription_time = self.api_response_time = self.tts_time = 0.0
+        self.total_latency = self.handback_time = 0.0
 
 
 class SpectraVoiceAssistant:
@@ -56,36 +60,46 @@ class SpectraVoiceAssistant:
     - Echo filtering prevents assistant from hearing itself
     """
     
-    MODE_CONFIG = {"terminal": (80, 0.8, "base", 800), "gui": (80, 0.8, "base", 800), "minimal": (60, 0.6, "tiny", 300)}
-    
-    # === BARGE-IN CONFIGURATION ===
-    # Tuned for responsive interruption while filtering pure noise
-    BARGE_IN_MIN_CONFIDENCE = 0.40  # Low enough to catch real speech mid-TTS
-    BARGE_IN_MIN_WORDS = 1  # Single word like "stop" or "hey" should interrupt
-    BARGE_IN_MIN_CHARS = 3  # Even short commands like "hey" or "no" count
-    
     def __init__(
         self, 
         mode: str = "terminal", 
         debug: bool = False, 
-        voice: str = "shimmer", 
+        voice: str | None = None, 
         whisper_model: str | None = None,
         llm_config = None,  # LLMConfig from assistant_app.llm (deprecated)
         llm_provider = None,  # Pre-validated LLMProvider instance
-        enable_barge_in: bool = True,  # Enable barge-in (interrupt TTS with new speech)
+        enable_barge_in: bool | None = None,  # None = use config value
+        config_manager: ConfigManager | None = None,  # None = global instance
     ):
+        # Config is the single source of runtime settings (config.yaml + env
+        # overrides); explicit CLI-derived arguments passed in here win.
+        self.config_manager = config_manager or get_config_manager()
+        cfg = self.config_manager.config
+        profile = cfg.mode_profile(mode)
+        
         self.mode, self.running = mode, True
         self.debug = debug
         self.logger = get_logger(__name__)
         self.metrics = PerformanceMetrics()
-        self.enable_barge_in = enable_barge_in
+        
+        # === BARGE-IN CONFIGURATION (config `barge_in:` section) ===
+        # Tuned for responsive interruption while filtering pure noise
+        self.enable_barge_in = cfg.barge_in.enabled if enable_barge_in is None else enable_barge_in
         self._barge_in_count = 0  # Track barge-in occurrences
+        self._barge_min_confidence = cfg.barge_in.min_confidence  # Low enough to catch real speech mid-TTS
+        self._barge_min_words = cfg.barge_in.min_words  # Single word like "stop" should interrupt
+        self._barge_min_chars = cfg.barge_in.min_chars  # Even short commands like "no" count
         
-        quality, scale, default_whisper, max_tokens = self.MODE_CONFIG.get(mode, self.MODE_CONFIG["terminal"])
-        self.whisper_model = whisper_model or default_whisper
-        self.voice = voice
+        self.whisper_model = whisper_model or profile.whisper_model
+        self.voice = voice or cfg.voice.tts_voice
+        self.mic_config = cfg.microphone
         
-        self.screen_capture = ScreenCapture(quality=quality, scale_factor=scale)
+        self.screen_capture = ScreenCapture(
+            quality=profile.screen_quality,
+            scale_factor=profile.screen_scale,
+            refresh_interval=cfg.screen.refresh_interval,
+            cache_duration=cfg.screen.cache_duration,
+        )
         
         # Privacy: screen content leaves the machine only with explicit consent
         # (SPECTRAVOICE_SCREEN_CONSENT, default OFF) and while not paused.
@@ -93,12 +107,18 @@ class SpectraVoiceAssistant:
         
         # Initialize assistant with provider or config
         if llm_provider is not None:
-            self.assistant = Assistant(max_tokens=max_tokens, provider=llm_provider, privacy_consent=self.privacy_consent)
+            self.assistant = Assistant(max_tokens=profile.max_tokens, provider=llm_provider, privacy_consent=self.privacy_consent)
         else:
-            self.assistant = Assistant(max_tokens=max_tokens, llm_config=llm_config, privacy_consent=self.privacy_consent)
+            self.assistant = Assistant(max_tokens=profile.max_tokens, llm_config=llm_config, privacy_consent=self.privacy_consent)
         
-        self.tts = TextToSpeech(voice=voice)
+        self.tts = TextToSpeech(
+            voice=self.voice,
+            hd_quality=cfg.tts.hd_quality,
+            output_device=cfg.tts.output_device,
+            speech_rate=cfg.voice.speech_rate,
+        )
         self.voice_detector = SmartVoiceDetector()
+        self._transcription_worker: TranscriptionWorker | None = None
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         atexit.register(stop_indicator)
@@ -148,26 +168,64 @@ class SpectraVoiceAssistant:
         """
         Callback for background voice recognition.
         
-        This runs in a background thread from speech_recognition.
-        With async TTS, this callback returns quickly, allowing continuous listening
-        even while the assistant is speaking.
+        Runs in a fresh thread from speech_recognition's listener. It only hands
+        the utterance to the transcription pipeline and returns: with the
+        TranscriptionWorker, recognize_whisper no longer holds this thread
+        (before W1 it blocked here for the full model-dependent transcription
+        time). Set `microphone.inline_transcription: true` in config.yaml to
+        restore the pre-W1 inline path.
+        """
+        cb_start = time.time()
+        self.metrics.reset()
+        
+        if self.mic_config.inline_transcription:
+            self._transcribe_and_handle(recognizer, audio, cb_start)
+            return
+        
+        worker = self._transcription_worker
+        if worker is None or not worker.submit(audio, spoken_at=cb_start):
+            self.logger.warning("🔇 Transcription queue full — dropping utterance")
+            return
+        self.metrics.handback_time = time.time() - cb_start
+    
+    def _transcribe_and_handle(self, recognizer, audio, spoken_at: float) -> None:
+        """Inline path (legacy): transcribe on the calling thread, then handle."""
+        try:
+            prompt = self._recognize(recognizer, audio)
+        except UnknownValueError:
+            return  # no speech found in the clip — normal
+        except Exception as e:
+            self.logger.error(f"❌ Transcription failed: {e}")
+            return
+        self._handle_prompt(prompt, spoken_at)
+    
+    def _recognize(self, recognizer, audio) -> str:
+        """Run Whisper on the audio. Raises on recognition failure.
+        
+        Pure transcription — transcript dispatch (_handle_prompt) belongs to the
+        caller, so the inline path and the TranscriptionWorker share one entry
+        point without handling the transcript twice.
+        """
+        trans_start = time.time()
+        try:
+            return recognizer.recognize_whisper(audio, model=self.whisper_model, language="english")
+        finally:
+            self.metrics.transcription_time = time.time() - trans_start
+    
+    def _handle_prompt(self, prompt: str, spoken_at: float) -> None:
+        """Validate a transcript and run the LLM + TTS response pipeline.
         
         Barge-in Logic (Step 4):
         - If TTS is playing and valid speech is detected → stop TTS
         - Process new speech as a new query (old response abandoned)
         
         Noise Protection (Step 6):
-        - Requires minimum confidence (BARGE_IN_MIN_CONFIDENCE)
-        - Requires minimum word count (BARGE_IN_MIN_WORDS)
+        - Requires minimum confidence (barge_in.min_confidence)
+        - Requires minimum word count (barge_in.min_words)
         - Echo filtering prevents assistant from hearing itself
         """
         try:
-            total_start = time.time()
-            self.metrics.reset()
-            
-            trans_start = time.time()
-            prompt = recognizer.recognize_whisper(audio, model=self.whisper_model, language="english")
-            self.metrics.transcription_time = time.time() - trans_start
+            total_start = spoken_at
             
             # === BARGE-IN CHECK ===
             # Check if TTS is playing BEFORE validating speech
@@ -193,9 +251,9 @@ class SpectraVoiceAssistant:
             barge_in_conditions = {
                 "tts_playing": is_tts_playing,
                 "enabled": self.enable_barge_in,
-                "confidence": confidence >= self.BARGE_IN_MIN_CONFIDENCE,
-                "words": word_count >= self.BARGE_IN_MIN_WORDS,
-                "chars": char_count >= self.BARGE_IN_MIN_CHARS,
+                "confidence": confidence >= self._barge_min_confidence,
+                "words": word_count >= self._barge_min_words,
+                "chars": char_count >= self._barge_min_chars,
             }
             should_barge_in = all(barge_in_conditions.values())
             
@@ -248,6 +306,7 @@ class SpectraVoiceAssistant:
                 self.logger.debug(
                     f"⏱️ Performance: Trans={self.metrics.transcription_time:.2f}s, "
                     f"API={self.metrics.api_response_time:.2f}s, "
+                    f"Handback={self.metrics.handback_time * 1000:.1f}ms, "
                     f"Total (pre-TTS)={self.metrics.total_latency:.2f}s"
                 )
                 
@@ -271,11 +330,38 @@ class SpectraVoiceAssistant:
                 self.logger.warning("❌ No response generated")
                 update_status("Listening")
                 
-        except UnknownValueError:
-            pass
         except Exception as e:
             self.logger.error(f"❌ Audio error: {e}")
             update_status("Listening")
+
+    
+    def _open_microphone(self, recognizer: Recognizer) -> Microphone:
+        """Open the configured input device, falling back to the system default on failure."""
+        mic = self.mic_config
+        try:
+            microphone = Microphone(device_index=mic.input_device)
+            if mic.input_device is not None:
+                self.logger.info(f"🎙️ Using configured input device index {mic.input_device}")
+            with microphone as source:
+                self.logger.info("🔧 Adjusting for ambient noise...")
+                recognizer.adjust_for_ambient_noise(source, duration=mic.ambient_noise_seconds)
+            return microphone
+        except Exception as e:
+            if mic.input_device is None:
+                raise
+            self.logger.error(
+                f"❌ Configured input device {mic.input_device} unavailable ({e}); falling back to system default"
+            )
+            microphone = Microphone()
+            with microphone as source:
+                recognizer.adjust_for_ambient_noise(source, duration=mic.ambient_noise_seconds)
+            return microphone
+    
+    def _on_transcription_error(self, exc: Exception, _job) -> None:
+        """TranscriptionWorker error callback."""
+        if isinstance(exc, UnknownValueError):
+            return  # no speech found in the audio clip — normal
+        self.logger.error(f"❌ Transcription failed: {exc}")
     
     def run(self) -> None:
         self.logger.info(f"🚀 SpectraVoice Starting ({self.mode.upper()} mode)")
@@ -284,19 +370,24 @@ class SpectraVoiceAssistant:
         
         self.logger.info("🎤 Setting up microphone...")
         recognizer = Recognizer()
-        # Higher energy threshold = less sensitive to background noise
-        # This reduces false triggers from ambient sounds
-        recognizer.energy_threshold = 5000  # Raised from 4000 to reduce noise sensitivity
-        recognizer.dynamic_energy_threshold = False
-        recognizer.pause_threshold = 0.8  # Seconds of silence before considering speech complete
+        mic = self.mic_config
+        recognizer.energy_threshold = mic.energy_threshold
+        recognizer.dynamic_energy_threshold = mic.dynamic_energy_threshold
+        recognizer.pause_threshold = mic.pause_threshold
         
-        microphone = Microphone()
-        with microphone as source:
-            self.logger.info("🔧 Adjusting for ambient noise...")
-            recognizer.adjust_for_ambient_noise(source, duration=1)
+        microphone = self._open_microphone(recognizer)
         
         self.logger.info("📸 Starting screen capture...")
         self.screen_capture.start()
+        
+        # Move Whisper off the audio-callback thread: transcription runs on a
+        # dedicated worker while the recognizer loop keeps listening.
+        if not mic.inline_transcription:
+            self._transcription_worker = TranscriptionWorker(
+                recognize=lambda audio: self._recognize(recognizer, audio),
+                on_result=lambda text, job: self._handle_prompt(text, job.spoken_at),
+                on_error=self._on_transcription_error,
+            ).start()
         
         self.logger.info("👂 Starting voice recognition...")
         stop_listening = recognizer.listen_in_background(microphone, self._audio_callback)
@@ -366,7 +457,13 @@ class SpectraVoiceAssistant:
         # Stop the status indicator
         stop_indicator()
         
-        for cleanup in [lambda: stop_listening(wait_for_stop=False), self.screen_capture.stop, self.tts.cleanup]:
+        cleanups = [
+            lambda: stop_listening(wait_for_stop=False),
+            lambda: self._transcription_worker.stop() if self._transcription_worker else None,
+            self.screen_capture.stop,
+            self.tts.cleanup,
+        ]
+        for cleanup in cleanups:
             try:
                 cleanup()
             except Exception:
@@ -385,7 +482,9 @@ class SpectraVoiceAssistant:
         while self.running:
             time.sleep(1)
             if time.time() - last_heartbeat >= 30:
-                self.logger.info(f"💓 SpectraVoice active... (interactions: {self.metrics.interaction_count})")
+                stats = self._transcription_worker.stats if self._transcription_worker else None
+                extra = f", transcribed: {stats.completed}, dropped: {stats.dropped}" if stats else ""
+                self.logger.info(f"💓 SpectraVoice active... (interactions: {self.metrics.interaction_count}{extra})")
                 last_heartbeat = time.time()
     
     def _run_gui_mode(self) -> None:

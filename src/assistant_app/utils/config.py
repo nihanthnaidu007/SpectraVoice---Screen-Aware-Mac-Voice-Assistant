@@ -33,7 +33,7 @@ class ScreenConfig:
 @dataclass
 class LLMProviderConfig:
     """LLM Provider configuration."""
-    provider: str = "cloud"  # "cloud" or "local"
+    provider: str = "auto"  # "cloud", "local", or "auto" (fall through to the interactive/GUI selector)
     cloud_model: str = "gpt-5"
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "deepseek-r1:7b"
@@ -82,6 +82,53 @@ class SafetyConfig:
 
 
 @dataclass
+class ModeProfile:
+    """Per-mode runtime profile (screen quality/scale, Whisper model, max tokens)."""
+    screen_quality: int = 80
+    screen_scale: float = 0.8
+    whisper_model: str = "base"
+    max_tokens: int = 800
+
+
+# Fallback when config.yaml has no `modes:` section — preserves the per-mode
+# behavior SpectraVoiceAssistant previously hardcoded in MODE_CONFIG.
+DEFAULT_MODE_PROFILES: dict[str, ModeProfile] = {
+    "terminal": ModeProfile(80, 0.8, "base", 800),
+    "gui": ModeProfile(80, 0.8, "base", 800),
+    "minimal": ModeProfile(60, 0.6, "tiny", 300),
+}
+
+
+@dataclass
+class BargeInConfig:
+    """Barge-in (interrupt while speaking) thresholds."""
+    enabled: bool = True
+    min_confidence: float = 0.40
+    min_words: int = 1
+    min_chars: int = 3
+
+
+@dataclass
+class MicrophoneConfig:
+    """Microphone input settings. input_device: PyAudio device index or null for system default."""
+    input_device: int | None = None
+    energy_threshold: int = 5000
+    dynamic_energy_threshold: bool = False
+    pause_threshold: float = 0.8
+    ambient_noise_seconds: float = 1.0
+    # Transcribe inside the audio callback (pre-W1 behavior) instead of the
+    # off-thread TranscriptionWorker. Kept for A/B measurement and fallback.
+    inline_transcription: bool = False
+
+
+@dataclass
+class TTSConfig:
+    """TTS output settings. output_device: PyAudio device index or null for system default."""
+    output_device: int | None = None
+    hd_quality: bool = True
+
+
+@dataclass
 class AssistantConfig:
     """Main configuration container."""
     voice: VoiceConfig = field(default_factory=VoiceConfig)
@@ -91,8 +138,20 @@ class AssistantConfig:
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    barge_in: BargeInConfig = field(default_factory=BargeInConfig)
+    microphone: MicrophoneConfig = field(default_factory=MicrophoneConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
+    modes: dict[str, ModeProfile] = field(default_factory=dict)
     mode: str = "terminal"
     debug: bool = False
+
+    def mode_profile(self, mode: str) -> ModeProfile:
+        """Resolve the runtime profile for a mode: config `modes:` entry, else built-in default."""
+        return (
+            self.modes.get(mode)
+            or DEFAULT_MODE_PROFILES.get(mode)
+            or DEFAULT_MODE_PROFILES["terminal"]
+        )
 
 
 class ConfigManager:
@@ -194,6 +253,15 @@ class ConfigManager:
             f"{self.ENV_PREFIX}LOG_LEVEL": ("logging", "level"),
             f"{self.ENV_PREFIX}LOG_FILE": ("logging", "file"),
             
+            # Barge-in
+            f"{self.ENV_PREFIX}BARGE_IN_ENABLED": ("barge_in", "enabled"),
+            f"{self.ENV_PREFIX}BARGE_IN_MIN_CONFIDENCE": ("barge_in", "min_confidence"),
+            
+            # Microphone / TTS devices
+            f"{self.ENV_PREFIX}MICROPHONE_INPUT_DEVICE": ("microphone", "input_device"),
+            f"{self.ENV_PREFIX}MICROPHONE_ENERGY_THRESHOLD": ("microphone", "energy_threshold"),
+            f"{self.ENV_PREFIX}TTS_OUTPUT_DEVICE": ("tts", "output_device"),
+            
             # Mode
             f"{self.ENV_PREFIX}MODE": ("mode", None),
             f"{self.ENV_PREFIX}DEBUG": ("debug", None),
@@ -233,15 +301,50 @@ class ConfigManager:
         return value
     
     def _build_config(self, config_dict: dict) -> AssistantConfig:
-        """Build AssistantConfig from dictionary."""
+        """Build AssistantConfig from dictionary, warning about unrecognized keys."""
+        from dataclasses import fields as dc_fields
+
+        def section(name: str, dc_cls: type) -> dict:
+            raw = config_dict.get(name, {})
+            if not isinstance(raw, dict):
+                logger.warning(f"⚠️ Config section '{name}' must be a mapping, got {type(raw).__name__} — using defaults")
+                return {}
+            known = {f.name for f in dc_fields(dc_cls)}
+            unknown = set(raw) - known
+            if unknown:
+                logger.warning(f"⚠️ Ignoring unknown config keys in '{name}': {sorted(unknown)}")
+            return {k: v for k, v in raw.items() if k in known}
+
+        raw_modes = config_dict.get('modes', {})
+        modes: dict[str, ModeProfile] = {}
+        if isinstance(raw_modes, dict):
+            for mode_name, values in raw_modes.items():
+                if not isinstance(values, dict):
+                    logger.warning(f"⚠️ Ignoring mode profile '{mode_name}': must be a mapping")
+                    continue
+                fallback = DEFAULT_MODE_PROFILES.get(str(mode_name), DEFAULT_MODE_PROFILES["terminal"])
+                try:
+                    modes[str(mode_name)] = ModeProfile(
+                        screen_quality=int(values.get("screen_quality", fallback.screen_quality)),
+                        screen_scale=float(values.get("screen_scale", fallback.screen_scale)),
+                        whisper_model=str(values.get("whisper_model", fallback.whisper_model)),
+                        max_tokens=int(values.get("max_tokens", fallback.max_tokens)),
+                    )
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"⚠️ Ignoring mode profile '{mode_name}': {e}")
+
         return AssistantConfig(
-            voice=VoiceConfig(**config_dict.get('voice', {})),
-            screen=ScreenConfig(**config_dict.get('screen', {})),
-            llm=LLMProviderConfig(**config_dict.get('llm', {})),
-            api=APIConfig(**config_dict.get('api', {})),
-            hotkeys=HotkeyConfig(**config_dict.get('hotkeys', {})),
-            logging=LoggingConfig(**config_dict.get('logging', {})),
-            safety=SafetyConfig(**config_dict.get('safety', {})),
+            voice=VoiceConfig(**section('voice', VoiceConfig)),
+            screen=ScreenConfig(**section('screen', ScreenConfig)),
+            llm=LLMProviderConfig(**section('llm', LLMProviderConfig)),
+            api=APIConfig(**section('api', APIConfig)),
+            hotkeys=HotkeyConfig(**section('hotkeys', HotkeyConfig)),
+            logging=LoggingConfig(**section('logging', LoggingConfig)),
+            safety=SafetyConfig(**section('safety', SafetyConfig)),
+            barge_in=BargeInConfig(**section('barge_in', BargeInConfig)),
+            microphone=MicrophoneConfig(**section('microphone', MicrophoneConfig)),
+            tts=TTSConfig(**section('tts', TTSConfig)),
+            modes=modes,
             mode=config_dict.get('mode', 'terminal'),
             debug=config_dict.get('debug', False),
         )
@@ -310,10 +413,45 @@ class ConfigManager:
         if not 0 <= cfg.api.temperature <= 2:
             issues.append(f"Temperature must be 0-2, got: {cfg.api.temperature}")
         
+        # LLM provider validation
+        if cfg.llm.provider not in {'auto', 'cloud', 'local'}:
+            issues.append(f"Invalid llm.provider: {cfg.llm.provider}. Valid: auto, cloud, local")
+        
+        # Speech rate validation (OpenAI TTS supports 0.25-4.0)
+        if not 0.25 <= cfg.voice.speech_rate <= 4.0:
+            issues.append(f"Speech rate must be 0.25-4.0, got: {cfg.voice.speech_rate}")
+        
         # Logging validation
         valid_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
         if cfg.logging.level.upper() not in valid_levels:
             issues.append(f"Invalid log level: {cfg.logging.level}. Valid: {valid_levels}")
+        
+        # Barge-in validation
+        if not 0 <= cfg.barge_in.min_confidence <= 1:
+            issues.append(f"Barge-in min_confidence must be 0-1, got: {cfg.barge_in.min_confidence}")
+        
+        if cfg.barge_in.min_words < 1:
+            issues.append(f"Barge-in min_words must be >= 1, got: {cfg.barge_in.min_words}")
+        
+        if cfg.barge_in.min_chars < 1:
+            issues.append(f"Barge-in min_chars must be >= 1, got: {cfg.barge_in.min_chars}")
+        
+        # Microphone validation
+        if cfg.microphone.energy_threshold <= 0:
+            issues.append(f"Microphone energy_threshold must be > 0, got: {cfg.microphone.energy_threshold}")
+        
+        if cfg.microphone.pause_threshold < 0.1:
+            issues.append(f"Microphone pause_threshold must be >= 0.1s, got: {cfg.microphone.pause_threshold}")
+        
+        if cfg.microphone.input_device is not None and cfg.microphone.input_device < 0:
+            issues.append(f"Microphone input_device must be a non-negative index or null, got: {cfg.microphone.input_device}")
+        
+        if cfg.microphone.ambient_noise_seconds < 0:
+            issues.append(f"Microphone ambient_noise_seconds must be >= 0, got: {cfg.microphone.ambient_noise_seconds}")
+        
+        # TTS validation
+        if cfg.tts.output_device is not None and cfg.tts.output_device < 0:
+            issues.append(f"TTS output_device must be a non-negative index or null, got: {cfg.tts.output_device}")
         
         # Mode validation
         valid_modes = {'terminal', 'gui', 'minimal'}
@@ -363,6 +501,24 @@ class ConfigManager:
                 'dry_run': cfg.safety.dry_run,
                 'block_dangerous_commands': cfg.safety.block_dangerous_commands,
                 'require_confirmation': cfg.safety.require_confirmation,
+            },
+            'barge_in': {
+                'enabled': cfg.barge_in.enabled,
+                'min_confidence': cfg.barge_in.min_confidence,
+                'min_words': cfg.barge_in.min_words,
+                'min_chars': cfg.barge_in.min_chars,
+            },
+            'microphone': {
+                'input_device': cfg.microphone.input_device,
+                'energy_threshold': cfg.microphone.energy_threshold,
+                'dynamic_energy_threshold': cfg.microphone.dynamic_energy_threshold,
+                'pause_threshold': cfg.microphone.pause_threshold,
+                'ambient_noise_seconds': cfg.microphone.ambient_noise_seconds,
+                'inline_transcription': cfg.microphone.inline_transcription,
+            },
+            'tts': {
+                'output_device': cfg.tts.output_device,
+                'hd_quality': cfg.tts.hd_quality,
             },
         }
     
