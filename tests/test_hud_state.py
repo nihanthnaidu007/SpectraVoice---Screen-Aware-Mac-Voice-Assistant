@@ -24,7 +24,10 @@ from assistant_app.hud.state import (
     Privacy,
     activity_from_status,
     icon_text,
+    listen_item_label,
     menu_summary,
+    pause_item_enabled,
+    pause_item_label,
     privacy_from_consent,
 )
 
@@ -43,6 +46,18 @@ class TestPrivacyTruthTable:
         assert activity_from_status("Thinking") is Activity.THINKING
         assert activity_from_status("Speaking") is Activity.SPEAKING
         assert activity_from_status("anything else") is Activity.IDLE
+
+    def test_menu_item_labels(self):
+        assert listen_item_label(True) == "Stop Listening"
+        assert listen_item_label(False) == "Start Listening"
+
+        assert pause_item_label(Privacy.ON) == "Pause Screen Sharing"
+        assert pause_item_label(Privacy.PAUSED) == "Resume Screen Sharing"
+        assert pause_item_label(Privacy.OFF) == "Screen Sharing Off (no consent)"
+
+        assert pause_item_enabled(Privacy.ON) is True
+        assert pause_item_enabled(Privacy.PAUSED) is True
+        assert pause_item_enabled(Privacy.OFF) is False
 
 
 class TestActivityPrivacyMatrix:

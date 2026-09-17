@@ -112,6 +112,25 @@ def menu_summary(snapshot: HUDSnapshot) -> str:
     return f"{snapshot.activity.value}{detail} · {privacy_note}"
 
 
+def listen_item_label(is_listening: bool) -> str:
+    """Menu title for the start/stop listening toggle."""
+    return "Stop Listening" if is_listening else "Start Listening"
+
+
+def pause_item_label(privacy: Privacy) -> str:
+    """Menu title for the pause/resume toggle (reflects the consent gate)."""
+    return {
+        Privacy.ON: "Pause Screen Sharing",
+        Privacy.PAUSED: "Resume Screen Sharing",
+        Privacy.OFF: "Screen Sharing Off (no consent)",
+    }[privacy]
+
+
+def pause_item_enabled(privacy: Privacy) -> bool:
+    """With consent off there is nothing to pause — the item renders disabled."""
+    return privacy is not Privacy.OFF
+
+
 class _Unset:
     """Sentinel for "leave this axis unchanged" — dictation's None is a real
     value (clears the sub-state), so it cannot double as the no-change marker."""
