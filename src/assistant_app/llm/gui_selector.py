@@ -16,11 +16,9 @@ Usage:
 """
 
 import os
-import sys
-from typing import Callable
+from collections.abc import Callable
 
 from .types import LLMConfig, ProviderType
-
 
 # Default models for each provider (Cloud must be GPT‑5 or above)
 CLOUD_MODELS = ["gpt-5", "gpt-5.1", "gpt-5.2"]
@@ -332,7 +330,7 @@ def select_provider_gui() -> LLMConfig | None:
     try:
         gui = LLMSelectorGUI()
         return gui.show()
-    except Exception as e:
+    except Exception:
         # GUI failed, return None to trigger fallback
         return None
 

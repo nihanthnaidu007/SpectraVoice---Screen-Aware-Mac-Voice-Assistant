@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        # Version-pinned: the default rule set is part of the lint contract.
+        run: pip install ruff==0.16.8
+      - name: Lint
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        # Only platform-independent deps are needed: the unit tests cover the
+        # command sandbox, privacy consent gate, logging, and LLM provider logic
+        # with mocks — no macOS frameworks, audio devices, or torch required.
+        run: pip install pytest openai httpx python-dotenv
+      - name: Run tests
+        run: pytest tests/ -q

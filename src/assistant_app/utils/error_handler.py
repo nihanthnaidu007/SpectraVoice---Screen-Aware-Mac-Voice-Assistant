@@ -1,11 +1,12 @@
 """Robust Error Handler with Auto-Retry and Exponential Backoff."""
 
-import time
 import functools
+import time
 import traceback
-from enum import Enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, TypeVar, ParamSpec
+from enum import Enum
+from typing import ParamSpec, TypeVar
 
 from assistant_app.utils.logging_config import get_logger
 

@@ -1,0 +1,25 @@
+# Ruff configuration — lint must pass on every PR (enforced in CI).
+# The rule set is ruff's default for the pinned ruff version (see CI) plus the
+# explicit relaxations below; the tool version is pinned so the contract is stable.
+line-length = 120
+target-version = "py312"
+
+[lint]
+ignore = [
+    # Legacy resilience pattern: broad `except Exception` guards throughout the
+    # assistant loop keep a desktop app alive on unexpected provider/GUI errors.
+    # Narrowing ~78 handlers is a Wave 1+ refactor, not a lint fix.
+    "BLE001",
+    "S110",
+    # Legacy class-level mutable config defaults (e.g. shared state lists).
+    "RUF012",
+    # Legacy subprocess calls in the GUI/display path without check=; the
+    # security-relevant call site (run_command) validates the return code.
+    "PLW1510",
+    # Style-only; collapsing nested ifs would churn legacy blocks for no gain.
+    "SIM102",
+    # Raising a custom exception type changes exception semantics for callers.
+    "TRY002",
+    # PEP 695 generics rewrite of a legacy helper; churn without behavior gain.
+    "UP047",
+]

@@ -47,21 +47,22 @@ For non-vision models, the assistant will fall back to text-only mode
 with a note explaining the limitation.
 """
 
-import os
 import json
+import os
 from typing import Any
 
 import httpx
 
 from assistant_app.utils.logging_config import get_logger
+
 from .base import LLMProvider
 from .types import (
     LLMConfig,
+    LLMError,
+    LLMErrorType,
     LLMMessage,
     LLMResponse,
     LLMToolCall,
-    LLMError,
-    LLMErrorType,
 )
 
 logger = get_logger(__name__)
@@ -486,7 +487,6 @@ IMPORTANT:
         
         Looks for JSON in the format: {"tool_call": {"name": "...", "arguments": {...}}}
         """
-        import re
         
         tool_calls = []
         
@@ -499,7 +499,7 @@ IMPORTANT:
                     if "tool_call" in data:
                         tc = data["tool_call"]
                         tool_calls.append(LLMToolCall(
-                            id=f"augmented_call_0",
+                            id="augmented_call_0",
                             name=tc.get("name", ""),
                             arguments=json.dumps(tc.get("arguments", {})),
                         ))
@@ -535,7 +535,7 @@ IMPORTANT:
                         if "tool_call" in data:
                             tc = data["tool_call"]
                             tool_calls.append(LLMToolCall(
-                                id=f"augmented_call_0",
+                                id="augmented_call_0",
                                 name=tc.get("name", ""),
                                 arguments=json.dumps(tc.get("arguments", {})),
                             ))

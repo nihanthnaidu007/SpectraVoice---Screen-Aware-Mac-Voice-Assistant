@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from assistant_app.tools.mouse_controller import (
-    get_mouse_controller, 
+    MouseButton,
     MouseController,
-    MouseButton, 
     MovementStyle,
-    ClickResult
+    get_mouse_controller,
 )
 from assistant_app.utils.logging_config import get_logger
 

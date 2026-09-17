@@ -4,6 +4,6 @@ Services Package
 High-level service orchestration modules.
 """
 
-from .spectravoice_assistant import SpectraVoiceAssistant, PerformanceMetrics
+from .spectravoice_assistant import PerformanceMetrics, SpectraVoiceAssistant
 
-__all__ = ["SpectraVoiceAssistant", "PerformanceMetrics"]
+__all__ = ["PerformanceMetrics", "SpectraVoiceAssistant"]

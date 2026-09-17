@@ -25,13 +25,13 @@ Usage:
 """
 
 import os
-import sys
 import subprocess
+import sys
 import threading
 import time
-from typing import Optional
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from assistant_app.utils.logging_config import get_logger
 
@@ -55,12 +55,12 @@ class IndicatorConfig:
 class IndicatorHandle:
     """Handle for controlling the indicator subprocess."""
     is_running: bool = False
-    _process: Optional[subprocess.Popen] = None
-    _status_file: Optional[Path] = None
+    _process: subprocess.Popen | None = None
+    _status_file: Path | None = None
 
 
 # Global indicator handle (singleton pattern for simplicity)
-_indicator_handle: Optional[IndicatorHandle] = None
+_indicator_handle: IndicatorHandle | None = None
 _lock = threading.Lock()
 
 
@@ -274,7 +274,7 @@ if __name__ == "__main__":
 '''
 
 
-def start_indicator(initial_status: str = "Live") -> Optional[IndicatorHandle]:
+def start_indicator(initial_status: str = "Live") -> IndicatorHandle | None:
     """Start the on-screen status indicator.
     
     Args:
@@ -372,8 +372,6 @@ def update_status(status: str) -> None:
         update_status("Listening")  # Shows "🤖 Listening" with green dot
         update_status("Thinking")   # Shows "🤖 Thinking" with orange dot
     """
-    global _indicator_handle
-    
     with _lock:
         if _indicator_handle is not None and _indicator_handle.is_running:
             try:
@@ -438,7 +436,7 @@ class IndicatorContext:
         self.initial_status = initial_status
         self.handle = None
     
-    def __enter__(self) -> "IndicatorContext":
+    def __enter__(self) -> Self:
         self.handle = start_indicator(self.initial_status)
         return self
     

@@ -1,10 +1,9 @@
 """Robust Mouse Controller - Advanced mouse control for macOS automation."""
 
-import time
 import math
+import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 from assistant_app.utils.logging_config import get_logger
 
@@ -475,7 +474,7 @@ class MouseController:
             ClickResult
         """
         try:
-            start_pos = self.get_position()
+            _start_pos = self.get_position()
             
             self.pyautogui.drag(dx, dy, duration=duration, button=button.value)
             

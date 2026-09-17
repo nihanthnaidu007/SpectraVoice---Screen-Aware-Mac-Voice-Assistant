@@ -29,50 +29,46 @@ ENVIRONMENT VARIABLES:
     OPENAI_API_KEY    - Required for cloud mode
 """
 
-from .types import (
-    LLMConfig,
-    LLMMessage,
-    LLMResponse,
-    LLMToolCall,
-    LLMError,
-    LLMErrorType,
-    ProviderType,
-)
 from .base import LLMProvider
-from .openai_provider import OpenAIProvider
-from .ollama_provider import OllamaProvider
 from .factory import (
-    create_provider, 
+    auto_select_provider,
+    create_provider,
     get_provider,
     get_provider_from_env,
-    auto_select_provider,
-    select_provider_interactive,
     select_provider_gui,
+    select_provider_interactive,
     select_provider_with_fallback,
 )
 from .gui_selector import select_llm_provider
+from .ollama_provider import OllamaProvider
+from .openai_provider import OpenAIProvider
+from .types import (
+    LLMConfig,
+    LLMError,
+    LLMErrorType,
+    LLMMessage,
+    LLMResponse,
+    LLMToolCall,
+    ProviderType,
+)
 
 __all__ = [
-    # Types
     "LLMConfig",
-    "LLMMessage",
-    "LLMResponse",
-    "LLMToolCall",
     "LLMError",
     "LLMErrorType",
-    "ProviderType",
-    # Providers
+    "LLMMessage",
     "LLMProvider",
-    "OpenAIProvider",
+    "LLMResponse",
+    "LLMToolCall",
     "OllamaProvider",
-    # Factory
+    "OpenAIProvider",
+    "ProviderType",
+    "auto_select_provider",
     "create_provider",
     "get_provider",
     "get_provider_from_env",
-    "auto_select_provider",
-    "select_provider_interactive",
-    "select_provider_gui",
-    "select_provider_with_fallback",
-    # GUI Selector
     "select_llm_provider",
+    "select_provider_gui",
+    "select_provider_interactive",
+    "select_provider_with_fallback",
 ]

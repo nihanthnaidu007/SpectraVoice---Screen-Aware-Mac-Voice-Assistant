@@ -2,7 +2,7 @@
 
 import base64
 import time
-from threading import Lock, Thread, Event
+from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
@@ -33,7 +33,7 @@ class ScreenCapture:
         return self
     
     def _capture_loop(self) -> None:
-        from PIL import ImageGrab, Image
+        from PIL import Image, ImageGrab
         
         last_capture = 0
         interval = 0.2

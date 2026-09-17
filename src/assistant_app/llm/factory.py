@@ -20,10 +20,11 @@ import os
 from typing import Any
 
 from assistant_app.utils.logging_config import get_logger
+
 from .base import LLMProvider
-from .types import LLMConfig, ProviderType, LLMError, LLMErrorType
-from .openai_provider import OpenAIProvider
 from .ollama_provider import OllamaProvider
+from .openai_provider import OpenAIProvider
+from .types import LLMConfig, LLMError, LLMErrorType, ProviderType
 
 logger = get_logger(__name__)
 
@@ -279,7 +280,7 @@ def _configure_local_provider() -> LLMConfig:
                         # User typed a model name
                         model = model_input
                         break
-                    print(f"❌ Invalid choice.")
+                    print("❌ Invalid choice.")
                 
                 print(f"✅ Using Local provider with {model}")
                 return LLMConfig.for_local(model=model, base_url=ollama_url)
@@ -330,8 +331,10 @@ def select_provider_gui() -> LLMConfig:
         LLMConfig based on user selection
     """
     from .gui_selector import (
-        select_provider_gui as _gui_select,
         is_gui_available,
+    )
+    from .gui_selector import (
+        select_provider_gui as _gui_select,
     )
     
     # Try GUI selection
