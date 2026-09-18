@@ -9,6 +9,7 @@ SpectraVoice is a hands-free voice assistant for macOS that can see your screen,
 - 🎤 **Voice Recognition**: Uses Whisper for speech-to-text
 - 👁️ **Screen Analysis**: Can see and understand your desktop in real time
 - 🧠 **Conversation Memory**: Remembers recent exchanges for context
+- 🗂️ **History Q&A**: Ask questions across your stored meeting transcripts — local-first (your configured Ollama model), cloud only behind an explicit consent flag, answers rendered in the history window (never spoken)
 - 🗣️ **Natural Speech**: High-quality text-to-speech with multiple voices
 - 🔧 **Function Calling**: Executes real actions on your computer via tools
 - 🌐 **Web Search**: Real-time web search for current information
