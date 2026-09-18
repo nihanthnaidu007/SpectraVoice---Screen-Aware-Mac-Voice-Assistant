@@ -46,6 +46,18 @@ class HUDActions(Protocol):
         """The active dictation mode, for the menu label."""
         ...
 
+    def dictation_enabled(self) -> bool:
+        """Whether dictation is currently enabled, for the menu label (W2 S3)."""
+        ...
+
+    def toggle_dictation_enabled(self) -> None:
+        """Enable/disable dictation at runtime — no relaunch (W2 S3).
+
+        The change flows through the config system (persisted + applied
+        live); pynput stays the sole hotkey path.
+        """
+        ...
+
     def open_settings(self) -> None:
         """Open the native settings window (W2 D2)."""
         ...

@@ -81,6 +81,7 @@ class _SettingsController(NSObject):
         # toggle row — None (headless/tests) renders config rows only.
         controller._consent_provider = consent_provider
         controller._consent_checkbox = None
+        controller._dictation_checkbox = None
         controller._field_map = {}
         controller.window = None
         return controller
@@ -100,6 +101,11 @@ class _SettingsController(NSObject):
         if self._consent_provider is not None:
             content.addArrangedSubview_(self._consent_header())
             content.addArrangedSubview_(self._consent_row())
+
+        # W2 S3: the runtime dictation toggle rides the same provider (the
+        # orchestrator) — persisted through the config system, applied live.
+        if self._consent_provider is not None and hasattr(self._consent_provider, "dictation_enabled"):
+            content.addArrangedSubview_(self._dictation_row())
 
         current_section: str | None = None
         for key in keys:
@@ -174,6 +180,43 @@ class _SettingsController(NSObject):
         if self._consent_checkbox is not None and self._consent_provider is not None:
             granted = bool(self._consent_provider.screen_consent_enabled())
             self._consent_checkbox.setState_(1 if granted else 0)
+        self._refresh_dictation()
+
+    def _refresh_dictation(self) -> None:
+        """Re-read the runtime dictation toggle (a HUD-side flip while open)."""
+        if self._dictation_checkbox is not None and self._consent_provider is not None:
+            enabled = bool(self._consent_provider.dictation_enabled())
+            self._dictation_checkbox.setState_(1 if enabled else 0)
+
+    def _dictation_row(self) -> Any:
+        """W2 S3: runtime dictation on/off — persisted via the config system
+        (save()/to_dict() round trip) and applied live; pynput stays the sole
+        hotkey path."""
+        row = NSStackView.alloc().init()
+        row.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        row.setSpacing_(8)
+
+        label = NSTextField.labelWithString_("dictation (runtime toggle)")
+        label.setToolTip_(
+            "Enable or disable dictation right now — no relaunch. The change "
+            "is saved to config.yaml and applied immediately. Global hotkeys "
+            "stay on pynput (the sole hotkey path)."
+        )
+        label.widthAnchor().constraintEqualToConstant_(240.0).setActive_(True)
+        row.addArrangedSubview_(label)
+
+        enabled = bool(self._consent_provider.dictation_enabled())
+        checkbox = NSButton.buttonWithTitle_target_action_("Enabled", self, "dictationAction:")
+        checkbox.setButtonType_(NSButtonTypeSwitch)
+        checkbox.setState_(1 if enabled else 0)
+        self._dictation_checkbox = checkbox
+        row.addArrangedSubview_(checkbox)
+
+        status = NSTextField.labelWithString_("runtime · saved to config.yaml · applies immediately")
+        status.setFont_(NSFont.systemFontOfSize_(10))
+        status.widthAnchor().constraintEqualToConstant_(200.0).setActive_(True)
+        row.addArrangedSubview_(status)
+        return row
 
     def _make_row(self, key: SettingKey) -> Any:
         row = NSStackView.alloc().init()
@@ -252,6 +295,15 @@ class _SettingsController(NSObject):
         enabled = sender.state() != 0  # NSControlStateValueOn
         self._consent_provider.set_screen_consent(bool(enabled))
         logger.info(f"👁️ Settings: screen consent {'granted' if enabled else 'revoked'}")
+
+    def dictationAction_(self, sender) -> None:
+        """W2 S3: the checkbox flips dictation through the config system —
+        persisted (save()/to_dict() round trip) and applied live, no relaunch."""
+        if self._consent_provider is None:
+            return
+        enabled = sender.state() != 0  # NSControlStateValueOn
+        self._consent_provider.set_dictation_enabled(bool(enabled))
+        logger.info(f"🎙️ Settings: dictation {'enabled' if enabled else 'disabled'}")
 
     def windowWillClose_(self, notification) -> None:  # NSWindow delegate
         _release_controller(self)

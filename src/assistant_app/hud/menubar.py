@@ -44,6 +44,7 @@ from assistant_app.hud.state import (
     HUDStateMachine,
     Privacy,
     consent_item_label,
+    dictation_toggle_item_label,
     icon_text,
     listen_item_label,
     meeting_item_label,
@@ -101,6 +102,9 @@ class MenuBarHUD(NSObject):
         if self._consent_item is not None:
             # Live label: the grant/revoke offer follows the gate (S1).
             self._consent_item.setTitle_(consent_item_label(snapshot.privacy))
+        if self._dictation_toggle_item is not None:
+            # Live label: the enable/disable offer follows the runtime toggle (S3).
+            self._dictation_toggle_item.setTitle_(dictation_toggle_item_label(snapshot.dictation))
         if self._meeting_item is not None:
             self._meeting_item.setTitle_(meeting_item_label(snapshot.meeting))
         if self._meeting_pause_item is not None:
@@ -145,6 +149,16 @@ class MenuBarHUD(NSObject):
         self._dictation_item = self._add_item(
             menu, f"Dictation Mode: {self._actions.current_dictation_mode()}", "onDictationMode:"
         )
+        # W2 S3: runtime dictation on/off — persists through the config
+        # system and applies live, no relaunch; pynput stays the sole hotkey
+        # path (this menu item is a control, never a second key listener).
+        self._dictation_toggle_item = self._add_item(
+            menu, dictation_toggle_item_label(None), "onDictationToggle:"
+        )
+        self._dictation_toggle_item.setToolTip_(
+            "Enable or disable dictation right now — no relaunch. The change "
+            "is saved to config.yaml and applied immediately."
+        )
         menu.addItem_(NSMenuItem.separatorItem())
 
         # W4 D2: history / privacy dashboard — below the meeting controls, in
@@ -185,6 +199,11 @@ class MenuBarHUD(NSObject):
         # HUD state) — cheap direct update keeps the label honest immediately.
         if self._dictation_item is not None:
             self._dictation_item.setTitle_(f"Dictation Mode: {self._actions.current_dictation_mode()}")
+
+    def onDictationToggle_(self, sender) -> None:
+        # W2 S3: runtime enable/disable — the applied state flows back as a
+        # snapshot ("off" axis state), which refreshes this item's label.
+        self._actions.toggle_dictation_enabled()
 
     def onMeetingToggle_(self, sender) -> None:
         self._actions.toggle_meeting()

@@ -89,6 +89,14 @@ class AssistantHUDActions:
             self._assistant.dictation.on_mode_toggle()
             self._assistant.sync_dictation_hud()
 
+    def dictation_enabled(self) -> bool:
+        return self._assistant.dictation_enabled()
+
+    def toggle_dictation_enabled(self) -> None:
+        # W2 S3: persists through the config system and applies live —
+        # no relaunch, pynput untouched.
+        self._assistant.toggle_dictation_enabled()
+
     def current_dictation_mode(self) -> str:
         d = self._assistant.dictation
         return d.activation if d is not None else "off"
@@ -283,6 +291,13 @@ class SpectraVoiceAssistant:
                 on_status=self._on_dictation_status,
                 on_dictated=self._on_dictated_text,
             )
+
+        # W2 S3: runtime dictation toggle. Baseline is the launch-resolved
+        # value (CLI --no-dictation stays authoritative until a real config
+        # change); the on_reload hook applies config changes live — no
+        # relaunch. Registered after config_manager exists.
+        self._dictation_runtime_state = self.dictation_enabled
+        self.config_manager.on_reload(self._apply_runtime_dictation)
 
         # === MEETING (W3) ===
         # Consent-gated per-meeting recording (D2): the config kill-switch must
@@ -954,16 +969,70 @@ class SpectraVoiceAssistant:
 
     def sync_dictation_hud(self) -> None:
         """Render W1 dictation state in the HUD (spec D1.3) from the
-        controller's own armed/inserting properties — no string parsing."""
+        controller's own armed/inserting properties — no string parsing.
+
+        W2 S3 adds the runtime-gated "off" state: a controller exists but
+        the config toggle disabled it (the menu offers Enable).
+        """
         d = self.dictation
         if d is None:
             self.hud_state.set_dictation(None)
+        elif not d.enabled:
+            self.hud_state.set_dictation("off")
         elif d.inserting:
             self.hud_state.set_dictation("inserting")
         elif d.armed:
             self.hud_state.set_dictation("ptt-held" if d.activation == "push_to_talk" else "vad-active")
         else:
             self.hud_state.set_dictation(None)
+
+    # === RUNTIME DICTATION TOGGLE (W2 S3) ===
+    # Dictation on/off from the HUD menu or settings, applied live — no
+    # relaunch. Mutation flows through the config system ONLY:
+    # ConfigManager.set_dictation_enabled persists (save()/to_dict() round
+    # trip — config.yaml stays the single settings source) and notifies;
+    # _apply_runtime_dictation applies the change to the live session. The
+    # pynput listener is NEVER rebuilt or re-registered: pynput stays the
+    # sole hotkey path, and the same listener also drives the non-dictation
+    # commands (mute/privacy/quit).
+
+    def dictation_enabled(self) -> bool:
+        """The applied dictation state (launch value or last runtime toggle)."""
+        return self._dictation_runtime_state
+
+    def set_dictation_enabled(self, enabled: bool) -> None:
+        """Runtime dictation on/off (W2 S3): persist via the config system;
+        the on_reload hook applies it live."""
+        self.config_manager.set_dictation_enabled(enabled)
+
+    def toggle_dictation_enabled(self) -> None:
+        """Menu convenience: flip the current applied state."""
+        self.set_dictation_enabled(not self.dictation_enabled())
+
+    def _apply_runtime_dictation(self, cfg) -> None:
+        """on_reload hook: apply dictation.enabled changes live (W2 S3).
+
+        Idempotent for unchanged values — the settings window reloads config
+        for unrelated keys, and a launch-time --no-dictation override must
+        not be silently overridden by an unrelated reload. Enabling
+        constructs the controller when the session launched without one;
+        disabling cancels the active session and gates the controller.
+        """
+        enabled = cfg.dictation.enabled
+        if enabled == self._dictation_runtime_state:
+            return
+        self._dictation_runtime_state = enabled
+        if enabled and self.dictation is None:
+            self.dictation = DictationController(
+                cfg.dictation,
+                on_status=self._on_dictation_status,
+                on_dictated=self._on_dictated_text,
+            )
+            self.dictation.start()
+        elif self.dictation is not None:
+            self.dictation.set_enabled(enabled)
+        self.sync_dictation_hud()
+        self.logger.info("🎙️ Dictation %s at runtime (config toggle)", "enabled" if enabled else "disabled")
 
     # === MEETING (W3) ===
 

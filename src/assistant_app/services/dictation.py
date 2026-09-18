@@ -250,6 +250,13 @@ class DictationController:
         self._released_at: float | None = None
         self._inserting = False
 
+        # W2 S3 runtime gate: the config system is the mutation path (the
+        # orchestrator persists via ConfigManager and notifies); the
+        # controller only gates. Disabled = never arms, active session
+        # canceled — the pynput listener keeps this controller reference, so
+        # there is no relaunch and no second hotkey path.
+        self._enabled = True
+
         # VAD-mode utterance assembly: transcript fragments from consecutive
         # clips inside the silence window, joined on utterance end.
         self._vad = VADStateMachine(silence_timeout=cfg.vad_silence_timeout)
@@ -267,6 +274,40 @@ class DictationController:
     def inserting(self) -> bool:
         with self._lock:
             return self._inserting
+
+    @property
+    def enabled(self) -> bool:
+        """W2 S3: runtime enable gate (config system is the mutation path)."""
+        with self._lock:
+            return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Apply the runtime dictation toggle (W2 S3) to this session.
+
+        Disable: unarm, drop pending VAD fragments, and cancel any
+        in-progress insertion (already-typed chunks stay — the documented
+        clean-cancel semantics). Enable: re-arm per the activation mode.
+        Config persistence is the caller's job (ConfigManager.set_dictation_enabled).
+        """
+        with self._lock:
+            if self._enabled == enabled:
+                return
+            self._enabled = enabled
+            if not enabled:
+                self._armed = False
+                self._release_pending = False
+                self._pending_fragments.clear()
+                self._vad.reset()
+            else:
+                self._armed = self.activation == "vad"
+        if enabled:
+            self.logger.info("🎙️ Dictation enabled at runtime (config toggle)")
+            self._emit_status()
+        else:
+            # Outside the lock — cancel() takes it. Aborts any in-progress
+            # insertion before it can type further chunks.
+            self.cancel()
+            self.logger.info("🎙️ Dictation disabled at runtime (config toggle)")
 
     def start(self) -> None:
         """Begin the dictation session for the configured activation mode.
@@ -312,6 +353,9 @@ class DictationController:
     def on_mode_toggle(self) -> None:
         """Cycle push_to_talk <-> vad (mode-toggle hotkey or CLI re-invocation)."""
         with self._lock:
+            # W2 S3: no mode changes while the runtime gate is off.
+            if not self._enabled:
+                return
             self.activation = "vad" if self.activation == "push_to_talk" else "push_to_talk"
             self._armed = self.activation == "vad"
             self._release_pending = False
@@ -328,6 +372,10 @@ class DictationController:
         capture cleanly.
         """
         with self._lock:
+            # W2 S3: a disabled session never arms — the hotkey press is a
+            # no-op (the pynput listener itself is untouched).
+            if not self._enabled:
+                return
             self._armed = True
             self._release_pending = False
         self.cancel()

@@ -159,6 +159,16 @@ def consent_item_label(privacy: Privacy) -> str:
     return "Grant Screen Consent\u2026" if privacy is Privacy.OFF else "Revoke Screen Consent"
 
 
+def dictation_toggle_item_label(dictation_state: str | None) -> str:
+    """Menu title for the runtime dictation on/off toggle (W2 S3).
+
+    Off (no controller, or the runtime gate disabled it) offers enable;
+    any live state offers disable. The label mirrors the applied state —
+    what the toggle does is decided by the config system, not the menu.
+    """
+    return "Enable Dictation" if dictation_state in (None, "off") else "Disable Dictation"
+
+
 class _Unset:
     """Sentinel for "leave this axis unchanged" — dictation's None is a real
     value (clears the sub-state), so it cannot double as the no-change marker."""
