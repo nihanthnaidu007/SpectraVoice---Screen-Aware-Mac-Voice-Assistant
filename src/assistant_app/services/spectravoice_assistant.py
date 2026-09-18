@@ -24,6 +24,11 @@ from assistant_app.io.vision.screen_capture import ScreenCapture
 from assistant_app.services.dictation import DictationController, prune_persisted_clips
 from assistant_app.services.meeting import MeetingController, run_startup_cleanup
 from assistant_app.services.meeting_summary import build_summarizer
+from assistant_app.services.refusals import (
+    MEETING_CONSENT_REFUSAL_MESSAGE,
+    MEETING_DISABLED_MESSAGE,
+    ask_failure_message,
+)
 from assistant_app.services.transcription import TranscriptionWorker
 from assistant_app.utils.config import ConfigManager, get_config_manager
 from assistant_app.utils.logging_config import get_logger
@@ -73,27 +78,60 @@ class AssistantHUDActions:
     def toggle_pause(self) -> None:
         self._assistant.toggle_pause()
 
+    def toggle_screen_consent(self) -> None:
+        self._assistant.toggle_screen_consent()
+
+    def current_screen_consent(self) -> bool:
+        return self._assistant.screen_consent_enabled()
+
     def switch_dictation_mode(self) -> None:
         if self._assistant.dictation is not None:
             self._assistant.dictation.on_mode_toggle()
             self._assistant.sync_dictation_hud()
+
+    def dictation_enabled(self) -> bool:
+        return self._assistant.dictation_enabled()
+
+    def toggle_dictation_enabled(self) -> None:
+        # W2 S3: persists through the config system and applies live —
+        # no relaunch, pynput untouched.
+        self._assistant.toggle_dictation_enabled()
 
     def current_dictation_mode(self) -> str:
         d = self._assistant.dictation
         return d.activation if d is not None else "off"
 
     def toggle_meeting(self) -> None:
-        self._assistant.toggle_meeting()
+        refusal = self._assistant.toggle_meeting()
+        if refusal:
+            # W2 S2: the refusal is user-visible, not log-only.
+            self._show_refusal_alert("Meeting recording", refusal)
+
+    def _show_refusal_alert(self, title: str, message: str) -> None:
+        """Render a refusal as an NSAlert (momentary main-thread UI — the
+        allowed AppKit surface). The terminal already printed the same
+        message, so off-darwin (no AppKit) logs instead of failing silently."""
+        try:
+            from AppKit import NSAlert
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.runModal()
+        except ImportError:
+            self._assistant.logger.warning(f"🚫 {title}: {message}")
 
     def pause_meeting(self) -> None:
         self._assistant.toggle_meeting_pause()
 
     def open_settings(self) -> None:
         # settings_window is darwin-only (lazy import raises ImportError with
-        # an explicit message off-darwin).
+        # an explicit message off-darwin). The orchestrator rides along as the
+        # consent provider (W2 S1): the settings window's toggle row reaches
+        # the same gate the HUD menu does.
         from assistant_app.hud.settings_window import open_settings_window
 
-        open_settings_window(self._assistant.config_manager)
+        open_settings_window(self._assistant.config_manager, consent_provider=self._assistant)
 
     def open_history(self) -> None:
         # history_window is darwin-only (lazy import raises ImportError with
@@ -254,6 +292,13 @@ class SpectraVoiceAssistant:
                 on_dictated=self._on_dictated_text,
             )
 
+        # W2 S3: runtime dictation toggle. Baseline is the launch-resolved
+        # value (CLI --no-dictation stays authoritative until a real config
+        # change); the on_reload hook applies config changes live — no
+        # relaunch. Registered after config_manager exists.
+        self._dictation_runtime_state = self.dictation_enabled
+        self.config_manager.on_reload(self._apply_runtime_dictation)
+
         # === MEETING (W3) ===
         # Consent-gated per-meeting recording (D2): the config kill-switch must
         # allow it and every start is explicit (--meeting, HUD menu, or the
@@ -329,6 +374,33 @@ class SpectraVoiceAssistant:
         else:
             self.pause_screen_sharing()
 
+    # === CONSENT YOU CAN SEE (W2 S1) ===
+    # The in-UI grant/revoke path. It delegates to the gate through
+    # Assistant.set_screen_consent — the same PrivacyConsent every consumer
+    # reads — so consent semantics are unchanged: OFF (no consent) and PAUSED
+    # still block vision upload (vision_calls == 0, testable). The grant is a
+    # runtime decision: it lives in the gate for this process, and the
+    # SPECTRAVOICE_SCREEN_CONSENT env default applies again on next launch.
+
+    def screen_consent_enabled(self) -> bool:
+        """Whether screen-upload consent is currently granted (menu/settings label)."""
+        return self.privacy_consent.consented
+
+    def set_screen_consent(self, enabled: bool) -> None:
+        """Grant/revoke screen consent in the running app (HUD menu, settings)."""
+        self.assistant.set_screen_consent(enabled)  # the phase-0 method, now reachable in production
+        if enabled:
+            self.logger.info("👁️ Screen consent granted — screenshots are sent with each query to the LLM provider")
+            print("👁️ Screen consent GRANTED — every query now sends a screenshot of your screen to your LLM provider")
+            print("   (revoke anytime from the HUD menu; the env default applies again on next launch)")
+        else:
+            self.logger.info("🔒 Screen consent revoked — queries run without vision")
+            print("🔒 Screen consent revoked — I will answer without seeing your screen")
+
+    def toggle_screen_consent(self) -> None:
+        """HUD menu / settings entry point: flip consent through the gate."""
+        self.set_screen_consent(not self.privacy_consent.consented)
+
     # === HISTORY / PRIVACY DASHBOARD (W4 D2) ===
     # The dashboard reflects and controls consent — it never bypasses a gate.
     # Corpus scans and file IO run on the CALLER's worker thread (the window
@@ -364,6 +436,7 @@ class SpectraVoiceAssistant:
             live_meeting_ids=self.live_meeting_ids(),
             last_sweep=self._last_sweep,
             cloud_qa_consent=cfg.history.cloud_qa_consent,
+            tool_log=self.get_tool_execution_log(),  # S4: audit tail in the dashboard
         )
 
     def history_summary_text(self, meeting_id: str) -> str:
@@ -391,7 +464,17 @@ class SpectraVoiceAssistant:
         except ValueError as exc:
             self.logger.warning(f"🚫 History Q&A refused: {exc}")
             return history_qa.HistoryAnswer(status="refused", answer=str(exc))
-        answer = engine.ask(question, live_meeting_ids=self.live_meeting_ids())
+        try:
+            answer = engine.ask(question, live_meeting_ids=self.live_meeting_ids())
+        except Exception as exc:
+            # W2 S2: surfaced, never swallowed — the log keeps the traceback,
+            # the user gets one actionable sentence (e.g. Ollama down).
+            self.logger.exception("History Q&A failed")
+            llm_cfg = self.config_manager.config.llm
+            return history_qa.HistoryAnswer(
+                status="error",
+                answer=ask_failure_message(exc, ollama_url=llm_cfg.ollama_url, ollama_model=llm_cfg.ollama_model),
+            )
         self.logger.info(f"💬 History Q&A answered from {len(answer.meetings_used)} stored meeting(s)")
         return answer
 
@@ -887,16 +970,70 @@ class SpectraVoiceAssistant:
 
     def sync_dictation_hud(self) -> None:
         """Render W1 dictation state in the HUD (spec D1.3) from the
-        controller's own armed/inserting properties — no string parsing."""
+        controller's own armed/inserting properties — no string parsing.
+
+        W2 S3 adds the runtime-gated "off" state: a controller exists but
+        the config toggle disabled it (the menu offers Enable).
+        """
         d = self.dictation
         if d is None:
             self.hud_state.set_dictation(None)
+        elif not d.enabled:
+            self.hud_state.set_dictation("off")
         elif d.inserting:
             self.hud_state.set_dictation("inserting")
         elif d.armed:
             self.hud_state.set_dictation("ptt-held" if d.activation == "push_to_talk" else "vad-active")
         else:
             self.hud_state.set_dictation(None)
+
+    # === RUNTIME DICTATION TOGGLE (W2 S3) ===
+    # Dictation on/off from the HUD menu or settings, applied live — no
+    # relaunch. Mutation flows through the config system ONLY:
+    # ConfigManager.set_dictation_enabled persists (save()/to_dict() round
+    # trip — config.yaml stays the single settings source) and notifies;
+    # _apply_runtime_dictation applies the change to the live session. The
+    # pynput listener is NEVER rebuilt or re-registered: pynput stays the
+    # sole hotkey path, and the same listener also drives the non-dictation
+    # commands (mute/privacy/quit).
+
+    def dictation_enabled(self) -> bool:
+        """The applied dictation state (launch value or last runtime toggle)."""
+        return self._dictation_runtime_state
+
+    def set_dictation_enabled(self, enabled: bool) -> None:
+        """Runtime dictation on/off (W2 S3): persist via the config system;
+        the on_reload hook applies it live."""
+        self.config_manager.set_dictation_enabled(enabled)
+
+    def toggle_dictation_enabled(self) -> None:
+        """Menu convenience: flip the current applied state."""
+        self.set_dictation_enabled(not self.dictation_enabled())
+
+    def _apply_runtime_dictation(self, cfg) -> None:
+        """on_reload hook: apply dictation.enabled changes live (W2 S3).
+
+        Idempotent for unchanged values — the settings window reloads config
+        for unrelated keys, and a launch-time --no-dictation override must
+        not be silently overridden by an unrelated reload. Enabling
+        constructs the controller when the session launched without one;
+        disabling cancels the active session and gates the controller.
+        """
+        enabled = cfg.dictation.enabled
+        if enabled == self._dictation_runtime_state:
+            return
+        self._dictation_runtime_state = enabled
+        if enabled and self.dictation is None:
+            self.dictation = DictationController(
+                cfg.dictation,
+                on_status=self._on_dictation_status,
+                on_dictated=self._on_dictated_text,
+            )
+            self.dictation.start()
+        elif self.dictation is not None:
+            self.dictation.set_enabled(enabled)
+        self.sync_dictation_hud()
+        self.logger.info("🎙️ Dictation %s at runtime (config toggle)", "enabled" if enabled else "disabled")
 
     # === MEETING (W3) ===
 
@@ -941,14 +1078,18 @@ class SpectraVoiceAssistant:
         self.hud_state.set_meeting("paused" if m.paused else "recording")
         self.hud_state.set_activity(Activity.MEETING)
 
-    def toggle_meeting(self) -> None:
+    def toggle_meeting(self) -> str | None:
         """Explicit per-meeting start/stop (D2): --meeting, the HUD menu, and
         the meeting_toggle hotkey all land here — the controller refuses
-        anything the consent gate does not allow."""
+        anything the consent gate does not allow.
+
+        W2 S2: returns the user-visible refusal message when refused (the
+        HUD menu renders it as an alert), None on success — the hotkey and
+        CLI launch paths ignore the return value as before."""
         m = self.meeting
         if m is None:
             self.logger.warning("🚫 Meeting mode is disabled (meeting.enabled: false)")
-            return
+            return MEETING_DISABLED_MESSAGE
         if m.recording:
             result = m.stop()
             if result is not None:
@@ -956,8 +1097,11 @@ class SpectraVoiceAssistant:
                     f"🏛️ Meeting saved: {result['utterances']} utterance(s), "
                     f"{result['gaps']} gap(s) → {result['meeting_dir']}"
                 )
-        elif m.start():
+            return None
+        if m.start():
             print("🏛️ Meeting recording started — everything stays on this device")
+            return None
+        return MEETING_CONSENT_REFUSAL_MESSAGE
 
     def toggle_meeting_pause(self) -> None:
         """Pause/resume the running meeting; skipped speech becomes a gap."""

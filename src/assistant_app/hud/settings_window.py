@@ -36,6 +36,7 @@ try:
         NSAlert,
         NSBackingStoreBuffered,
         NSButton,
+        NSButtonTypeSwitch,
         NSEdgeInsetsMake,
         NSFont,
         NSScrollView,
@@ -69,13 +70,18 @@ def _display(value: Any) -> str:
 class _SettingsController(NSObject):
     """Window controller: renders the discovered keys, applies via the model."""
 
-    def initWithManager_(self, config_manager: ConfigManager):
+    def initWithManager_consentProvider_(self, config_manager: ConfigManager, consent_provider=None):
         # PyObjC two-phase init: super().init() may return a different
         # instance (or None), so configure and return that object directly.
         controller = super().init()
         if controller is None:
             return None
         controller._manager = config_manager
+        # W2 S1: the live provider (the orchestrator) backing the consent
+        # toggle row — None (headless/tests) renders config rows only.
+        controller._consent_provider = consent_provider
+        controller._consent_checkbox = None
+        controller._dictation_checkbox = None
         controller._field_map = {}
         controller.window = None
         return controller
@@ -89,6 +95,17 @@ class _SettingsController(NSObject):
         content.setOrientation_(NSUserInterfaceLayoutOrientationVertical)
         content.setSpacing_(4)
         content.setEdgeInsets_(NSEdgeInsetsMake(16, 16, 16, 16))
+
+        # W2 S1: the consent toggle leads the window — the one setting that
+        # governs what leaves the machine outranks every preference below.
+        if self._consent_provider is not None:
+            content.addArrangedSubview_(self._consent_header())
+            content.addArrangedSubview_(self._consent_row())
+
+        # W2 S3: the runtime dictation toggle rides the same provider (the
+        # orchestrator) — persisted through the config system, applied live.
+        if self._consent_provider is not None and hasattr(self._consent_provider, "dictation_enabled"):
+            content.addArrangedSubview_(self._dictation_row())
 
         current_section: str | None = None
         for key in keys:
@@ -124,6 +141,82 @@ class _SettingsController(NSObject):
         label = NSTextField.labelWithString_(f"— {title} —")
         label.setFont_(NSFont.boldSystemFontOfSize_(12))
         return label
+
+    def _consent_header(self) -> Any:
+        label = NSTextField.labelWithString_("— consent —")
+        label.setFont_(NSFont.boldSystemFontOfSize_(12))
+        return label
+
+    def _consent_row(self) -> Any:
+        row = NSStackView.alloc().init()
+        row.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        row.setSpacing_(8)
+
+        label = NSTextField.labelWithString_("screen upload consent (runtime grant)")
+        label.setToolTip_(
+            "When checked, every query sends a screenshot of your screen to "
+            "your LLM provider (local or cloud). Off or paused always keeps "
+            "upload blocked. The grant lives in the running app — the "
+            "SPECTRAVOICE_SCREEN_CONSENT env default applies again on next launch."
+        )
+        label.widthAnchor().constraintEqualToConstant_(240.0).setActive_(True)
+        row.addArrangedSubview_(label)
+
+        granted = bool(self._consent_provider.screen_consent_enabled())
+        checkbox = NSButton.buttonWithTitle_target_action_("Granted", self, "consentAction:")
+        checkbox.setButtonType_(NSButtonTypeSwitch)
+        checkbox.setState_(1 if granted else 0)
+        self._consent_checkbox = checkbox
+        row.addArrangedSubview_(checkbox)
+
+        status = NSTextField.labelWithString_("runtime · resets to env default on relaunch")
+        status.setFont_(NSFont.systemFontOfSize_(10))
+        status.widthAnchor().constraintEqualToConstant_(200.0).setActive_(True)
+        row.addArrangedSubview_(status)
+        return row
+
+    def refresh_consent(self) -> None:
+        """Re-read the gate (a HUD-side grant while this window was open)."""
+        if self._consent_checkbox is not None and self._consent_provider is not None:
+            granted = bool(self._consent_provider.screen_consent_enabled())
+            self._consent_checkbox.setState_(1 if granted else 0)
+        self._refresh_dictation()
+
+    def _refresh_dictation(self) -> None:
+        """Re-read the runtime dictation toggle (a HUD-side flip while open)."""
+        if self._dictation_checkbox is not None and self._consent_provider is not None:
+            enabled = bool(self._consent_provider.dictation_enabled())
+            self._dictation_checkbox.setState_(1 if enabled else 0)
+
+    def _dictation_row(self) -> Any:
+        """W2 S3: runtime dictation on/off — persisted via the config system
+        (save()/to_dict() round trip) and applied live; pynput stays the sole
+        hotkey path."""
+        row = NSStackView.alloc().init()
+        row.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        row.setSpacing_(8)
+
+        label = NSTextField.labelWithString_("dictation (runtime toggle)")
+        label.setToolTip_(
+            "Enable or disable dictation right now — no relaunch. The change "
+            "is saved to config.yaml and applied immediately. Global hotkeys "
+            "stay on pynput (the sole hotkey path)."
+        )
+        label.widthAnchor().constraintEqualToConstant_(240.0).setActive_(True)
+        row.addArrangedSubview_(label)
+
+        enabled = bool(self._consent_provider.dictation_enabled())
+        checkbox = NSButton.buttonWithTitle_target_action_("Enabled", self, "dictationAction:")
+        checkbox.setButtonType_(NSButtonTypeSwitch)
+        checkbox.setState_(1 if enabled else 0)
+        self._dictation_checkbox = checkbox
+        row.addArrangedSubview_(checkbox)
+
+        status = NSTextField.labelWithString_("runtime · saved to config.yaml · applies immediately")
+        status.setFont_(NSFont.systemFontOfSize_(10))
+        status.widthAnchor().constraintEqualToConstant_(200.0).setActive_(True)
+        row.addArrangedSubview_(status)
+        return row
 
     def _make_row(self, key: SettingKey) -> Any:
         row = NSStackView.alloc().init()
@@ -193,6 +286,25 @@ class _SettingsController(NSObject):
         if self.window is not None:
             self.window.orderOut_(sender)
 
+    def consentAction_(self, sender) -> None:
+        """W2 S1: the checkbox toggles the live gate via the provider — the
+        same set_screen_consent path the HUD menu uses (never a config write;
+        consent is gate state, not a config key)."""
+        if self._consent_provider is None:
+            return
+        enabled = sender.state() != 0  # NSControlStateValueOn
+        self._consent_provider.set_screen_consent(bool(enabled))
+        logger.info(f"👁️ Settings: screen consent {'granted' if enabled else 'revoked'}")
+
+    def dictationAction_(self, sender) -> None:
+        """W2 S3: the checkbox flips dictation through the config system —
+        persisted (save()/to_dict() round trip) and applied live, no relaunch."""
+        if self._consent_provider is None:
+            return
+        enabled = sender.state() != 0  # NSControlStateValueOn
+        self._consent_provider.set_dictation_enabled(bool(enabled))
+        logger.info(f"🎙️ Settings: dictation {'enabled' if enabled else 'disabled'}")
+
     def windowWillClose_(self, notification) -> None:  # NSWindow delegate
         _release_controller(self)
 
@@ -213,17 +325,20 @@ def _release_controller(controller: _SettingsController) -> None:
         _CONTROLLER = None
 
 
-def open_settings_window(config_manager: ConfigManager) -> None:
+def open_settings_window(config_manager: ConfigManager, consent_provider=None) -> None:
     """Open (or focus) the native settings window for this config.
 
     Must be called on the main thread — the HUD menu is the entry point, so
-    the NSApplication run loop is already live.
+    the NSApplication run loop is already live. ``consent_provider`` (W2 S1)
+    is the live orchestrator backing the consent toggle row; omitting it
+    renders the config keys only.
     """
     global _CONTROLLER
     if _CONTROLLER is not None and _CONTROLLER.window is not None:
+        _CONTROLLER.refresh_consent()  # the gate may have moved since open
         _CONTROLLER.window.makeKeyAndOrderFront_(None)
         return
-    controller = _SettingsController.alloc().initWithManager_(config_manager)
+    controller = _SettingsController.alloc().initWithManager_consentProvider_(config_manager, consent_provider)
     controller.build_window()
     controller.window.makeKeyAndOrderFront_(None)
     _CONTROLLER = controller

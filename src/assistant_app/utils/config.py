@@ -2,7 +2,7 @@
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -558,6 +558,22 @@ class ConfigManager:
                 callback(config)
             except Exception:
                 logger.exception("Config reload callback failed — continuing")
+
+    def set_dictation_enabled(self, enabled: bool) -> None:
+        """Flip dictation.enabled in memory, persist, and notify (W2 S3).
+
+        Single mutation path for the runtime dictation toggle (HUD menu and
+        settings checkbox both land here): save() writes config.yaml through
+        to_dict() — the W2 round-trip gate, a fresh load() reads the new
+        value — and notify_config_changed runs the registered reload
+        callbacks so the orchestrator applies the change live, no relaunch.
+        """
+        current = self.config
+        if current.dictation.enabled == enabled:
+            return
+        self._config = replace(current, dictation=replace(current.dictation, enabled=enabled))
+        self.save()
+        self.notify_config_changed(self._config)
 
     @classmethod
     def env_mapping_table(cls) -> dict[tuple[str, str], str]:

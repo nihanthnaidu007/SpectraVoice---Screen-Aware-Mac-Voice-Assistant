@@ -30,6 +30,7 @@ from assistant_app.hud.history_model import (
     HistorySnapshot,
     format_history_snapshot,
     format_meeting_line,
+    format_tool_audit_lines,
 )
 from assistant_app.services.history_qa import format_answer
 from assistant_app.utils.logging_config import get_logger
@@ -178,7 +179,10 @@ class _HistoryController(NSObject):
         header = format_history_snapshot(
             HistorySnapshot(meetings=(), retention=snapshot.retention, consent=snapshot.consent)
         )
-        self._set_document_text(header, snapshot.meetings)
+        # S4: the tool-audit tail rides the header block — pure model output
+        # from the same off-thread snapshot; nothing here mutates the log.
+        text = "\n\n".join([header, *format_tool_audit_lines(snapshot.tool_audit)])
+        self._set_document_text(text, snapshot.meetings)
 
     def applyDetails_(self, message: Any) -> None:
         """Render a worker outcome (summary text, export/delete result)."""

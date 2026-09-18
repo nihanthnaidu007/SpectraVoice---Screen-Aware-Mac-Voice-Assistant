@@ -21,6 +21,15 @@ class HUDActions(Protocol):
         """Pause/resume screen sharing via the consent gate (never bypass it)."""
         ...
 
+    def toggle_screen_consent(self) -> None:
+        """Grant/revoke screen consent via the gate (W2 S1: consent you can
+        see) — the in-UI path to the same consent every consumer reads."""
+        ...
+
+    def current_screen_consent(self) -> bool:
+        """Whether screen consent is currently granted, for the menu label."""
+        ...
+
     def switch_dictation_mode(self) -> None:
         """Cycle the W1 dictation mode (push-to-talk <-> VAD) via config."""
         ...
@@ -35,6 +44,18 @@ class HUDActions(Protocol):
 
     def current_dictation_mode(self) -> str:
         """The active dictation mode, for the menu label."""
+        ...
+
+    def dictation_enabled(self) -> bool:
+        """Whether dictation is currently enabled, for the menu label (W2 S3)."""
+        ...
+
+    def toggle_dictation_enabled(self) -> None:
+        """Enable/disable dictation at runtime — no relaunch (W2 S3).
+
+        The change flows through the config system (persisted + applied
+        live); pynput stays the sole hotkey path.
+        """
         ...
 
     def open_settings(self) -> None:

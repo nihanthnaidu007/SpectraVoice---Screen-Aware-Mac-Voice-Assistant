@@ -1,14 +1,123 @@
-# SpectraVoice Configuration
-# ==========================
-# All settings can be overridden with environment variables using VA_ prefix
-# Example: VA_VOICE_TTS_VOICE=nova
-
-# Operation mode: terminal, gui, or minimal
 mode: terminal
+debug: false
+voice:
+  tts_voice: shimmer
+  whisper_model: base
+  language: en
+  speech_rate: 1.0
+screen:
+  quality: 80
+  scale_factor: 0.8
+  refresh_interval: 0.2
+  cache_duration: 1.0
+llm:
+  provider: auto
+  cloud_model: gpt-5
+  ollama_url: http://localhost:11434
+  ollama_model: llama3.2
+  max_tokens: 800
+  temperature: 0.7
+  timeout: 60
+  enable_vision: true
+  enable_tools: true
+api:
+  openai_model: gpt-5
+  max_tokens: 800
+  temperature: 0.7
+  timeout: 30
+  max_retries: 3
+hotkeys:
+  mute_toggle: cmd+shift+m
+  push_to_talk: space
+  pause_resume: cmd+shift+p
+  quit: cmd+shift+q
+  dictation_mode: cmd+shift+d
+  meeting_toggle: cmd+shift+e
+logging:
+  level: INFO
+  file: logs/assistant.log
+  max_size_mb: 10
+  backup_count: 5
+  format: '%(asctime)s [%(levelname)s] %(name)s - %(message)s'
+safety:
+  dry_run: false
+  block_dangerous_commands: true
+  require_confirmation: false
+barge_in:
+  enabled: true
+  min_confidence: 0.4
+  min_words: 1
+  min_chars: 3
+microphone:
+  input_device: null
+  energy_threshold: 5000
+  dynamic_energy_threshold: false
+  pause_threshold: 0.8
+  ambient_noise_seconds: 1.0
+  inline_transcription: false
+tts:
+  output_device: null
+  hd_quality: true
+supervisor:
+  enabled: true
+  max_restarts: 5
+  window_seconds: 60
+  backoff_seconds: 1
+  backoff_max_seconds: 30
+dictation:
+  enabled: true
+  activation: push_to_talk
+  style: standard
+  app_styles:
+    terminal: minimal
+    iterm: minimal
+    iterm2: minimal
+  filler_removal: true
+  filler_words:
+  - um
+  - uh
+  - er
+  - ah
+  - hmm
+  - like
+  - you know
+  - i mean
+  - sort of
+  - kind of
+  snippets:
+    period: .
+    comma: ','
+    question mark: '?'
+    exclamation mark: '!'
+    colon: ':'
+    semicolon: ;
+    open paren: (
+    close paren: )
+    new line: '
 
-# Per-mode runtime profiles: screen quality/scale, Whisper model, LLM max tokens.
-# The profile for the active mode applies unless the same key is set elsewhere
-# in this file (e.g. voice.whisper_model) or overridden on the command line.
+      '
+    new paragraph: '
+
+
+      '
+  vad_silence_timeout: 1.2
+  insert_enter: false
+  persist_audio: false
+  audio_dir: ''
+  retention_hours: 0
+meeting:
+  enabled: false
+  language: english
+  queue_depth: 256
+  persist_audio: false
+  audio_dir: ''
+  retention_hours: 0
+  summarizer: local
+  cloud_consent: false
+  chunk_chars: 6000
+history:
+  export_dir: ''
+  cloud_qa_consent: false
 modes:
   terminal:
     screen_quality: 80
@@ -25,298 +134,3 @@ modes:
     screen_scale: 0.6
     whisper_model: tiny
     max_tokens: 300
-
-# Enable debug mode for verbose logging
-debug: false
-
-# Voice Settings
-voice:
-  # OpenAI TTS voice: alloy, echo, fable, onyx, nova, shimmer
-  tts_voice: shimmer
-  
-  # Whisper model for speech recognition: tiny, base, small, medium, large
-  whisper_model: base
-  
-  # Speech recognition language
-  language: en
-  
-  # Speech rate multiplier (0.5 = half speed, 2.0 = double speed)
-  speech_rate: 1.0
-
-# Screen Capture Settings
-screen:
-  # JPEG quality for screen capture (1-100)
-  quality: 80
-  
-  # Scale factor for captured images (0.1-1.0)
-  scale_factor: 0.8
-  
-  # Refresh interval in seconds
-  refresh_interval: 0.2
-  
-  # Cache duration in seconds
-  cache_duration: 1.0
-
-# LLM Provider Settings
-llm:
-  # Provider type: cloud (OpenAI), local (Ollama), or auto
-  # (auto = interactive/GUI selection at startup, the legacy behavior)
-  provider: auto
-  
-  # Cloud (OpenAI GPT‑5) settings
-  cloud_model: gpt-5
-  
-  # Local (Ollama) settings
-  ollama_url: http://localhost:11434
-  ollama_model: llama3.2
-  
-  # Generation settings
-  max_tokens: 800
-  temperature: 0.7
-  
-  # Timeout in seconds
-  timeout: 60
-  
-  # Feature flags
-  enable_vision: true
-  enable_tools: true
-
-# API Settings (legacy, use llm section instead)
-api:
-  # OpenAI model to use (deprecated, use llm.cloud_model)
-  openai_model: gpt-5
-  
-  # Maximum tokens for responses
-  max_tokens: 800
-  
-  # Temperature for response generation (0-2)
-  temperature: 0.7
-  
-  # Request timeout in seconds
-  timeout: 30
-  
-  # Maximum retry attempts for failed requests
-  max_retries: 3
-
-# Hotkey Settings (not yet implemented)
-hotkeys:
-  # Toggle mute
-  mute_toggle: cmd+shift+m
-  
-  # Push-to-talk key
-  push_to_talk: space
-  
-  # Pause/resume assistant
-  pause_resume: cmd+shift+p
-  
-  # Quit assistant
-  quit: cmd+shift+q
-
-  # Start/stop the meeting recording (requires meeting.enabled: true)
-  meeting_toggle: cmd+shift+e
-
-# Logging Settings
-logging:
-  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-  level: INFO
-  
-  # Log file path
-  file: logs/assistant.log
-  
-  # Maximum log file size in MB
-  max_size_mb: 10
-  
-  # Number of backup log files to keep
-  backup_count: 5
-
-# Safety Settings
-safety:
-  # Dry run mode - log actions without executing
-  dry_run: false
-  
-  # Block dangerous terminal commands
-  block_dangerous_commands: true
-  
-  # Require confirmation for certain actions (not yet implemented)
-  require_confirmation: false
-
-# Barge-in Settings (interrupting the assistant while it speaks)
-barge_in:
-  # Allow new speech to interrupt TTS playback
-  enabled: true
-  
-  # Minimum transcription confidence (0-1) to interrupt
-  min_confidence: 0.40
-  
-  # Minimum word count to interrupt
-  min_words: 1
-  
-  # Minimum character count to interrupt
-  min_chars: 3
-
-# Microphone Settings
-microphone:
-  # PyAudio input device index (run scripts/list_audio_devices.py to list).
-  # null = system default input device
-  input_device: null
-  
-  # Energy threshold for speech detection (higher = less sensitive to noise)
-  energy_threshold: 5000
-  
-  # Automatically adjust energy threshold while listening
-  dynamic_energy_threshold: false
-  
-  # Seconds of silence before considering an utterance complete
-  pause_threshold: 0.8
-  
-  # Seconds spent calibrating for ambient noise at startup
-  ambient_noise_seconds: 1.0
-  
-  # Transcribe inside the audio callback (legacy pre-streaming behavior)
-  # instead of a dedicated transcription thread (default: off-thread)
-  inline_transcription: false
-
-# TTS Output Settings
-tts:
-  # PyAudio output device index (run scripts/list_audio_devices.py to list).
-  # null = system default output device
-  output_device: null
-  
-  # Use tts-1-hd for higher quality synthesis
-  hd_quality: true
-
-# Dictation Mode (W1)
-# Speech is transcribed with local Whisper, cleaned (fillers removed, spoken
-# snippets expanded), and typed at the cursor. Nothing leaves this machine:
-# transcription is local-only and audio is kept for the session only unless
-# persist_audio is enabled.
-dictation:
-  # Dictation is off by default; enable with `python main.py --dictation`
-  enabled: false
-
-  # Activation: "push_to_talk" (hold the hotkeys.push_to_talk key while
-  # speaking) or "vad" (continuous — an utterance is inserted after
-  # vad_silence_timeout seconds of silence)
-  activation: push_to_talk
-
-  # Cleanup style: "standard" removes filler words for prose targets;
-  # "minimal" keeps text verbatim (only snippets expand) for terminals
-  style: standard
-
-  # Per-app style overrides (lowercased frontmost app name -> style)
-  app_styles:
-    terminal: minimal
-    iterm: minimal
-    iterm2: minimal
-
-  filler_removal: true
-  filler_words: [um, uh, er, ah, hmm, like, "you know", "i mean", "sort of", "kind of"]
-
-  # Spoken phrase -> typed expansion (applies in every style)
-  snippets:
-    period: "."
-    comma: ","
-    question mark: "?"
-    exclamation mark: "!"
-    colon: ":"
-    semicolon: ";"
-    open paren: "("
-    close paren: ")"
-    new line: "\n"
-    new paragraph: "\n\n"
-
-  # Seconds of silence that end a VAD-mode utterance
-  vad_silence_timeout: 1.2
-
-  # Press Enter after each dictation insert
-  insert_enter: false
-
-  # Privacy: dictation audio is dropped when the session ends. Set true to
-  # write each clip as a WAV file under audio_dir (still local-only, never
-  # uploaded).
-  persist_audio: false
-  audio_dir: ""
-
-  # Retention: persisted clips older than this many hours are deleted at
-  # startup; 0 keeps them forever (same mechanism as meeting.retention_hours).
-  retention_hours: 0
-
-# Meeting Recording (W3)
-# Transparent, consent-gated meeting capture with local transcription and
-# local-first summaries. Double-gated: `enabled` is the config kill-switch,
-# AND every recording requires an explicit per-meeting start (--meeting flag,
-# the HUD menu item, or the meeting_toggle hotkey). While a meeting is live
-# the recording state stays visible (HUD red dot + menu header), the
-# assistant's TTS is muted, and ALL microphone audio is transcribed into the
-# meeting transcript instead of entering the screen-aware assistant flow.
-meeting:
-  # Kill-switch: false makes meeting recording impossible from every start
-  # path. Even when true, nothing records until you explicitly start a meeting.
-  enabled: false
-
-  # Whisper transcription language for meetings (spoken language name or code).
-  language: english
-
-  # Fidelity queue depth for meeting transcription. Deliberately much deeper
-  # than the dictation queue (depth 2, which evicts oldest on overflow): a
-  # meeting must never silently lose an utterance. If this queue still fills,
-  # a gap marker is written into the transcript instead — silent loss is
-  # impossible by construction.
-  queue_depth: 256
-
-  # Keep each utterance clip as a WAV file next to the transcript (local-only,
-  # never uploaded). Off by default: the transcript alone is ~1-2 kB/min.
-  persist_audio: false
-
-  # Local-only directory for meeting artifacts (transcript JSONL + summaries).
-  audio_dir: ""
-
-  # Meeting artifacts older than this many hours are deleted at startup;
-  # 0 keeps them forever. Applies per meeting directory (transcript, summary,
-  # and clips age together).
-  retention_hours: 0
-
-  # Summarizer: "local" (Ollama, default — third-party speech never leaves the
-  # device) or "cloud" (OpenAI). The cloud path ALSO requires the separate
-  # cloud_consent flag below; both must be set before any transcript fragment
-  # can be sent off-device.
-  summarizer: local
-
-  # Separate, explicit consent for cloud summarization of meeting transcripts.
-  # Off by default, and validation refuses summarizer: cloud without it.
-  cloud_consent: false
-
-  # Map-reduce summarization chunk size in characters — long meetings are
-  # summarized per chunk, then reduced into the final summary.
-  chunk_chars: 6000
-
-# History & Privacy Dashboard (W4)
-# Knobs for the history surface (privacy dashboard, search, headless CLI).
-# Search itself has no settings (scan-on-query by design) and retention stays
-# on the meeting/dictation sections — one shared mechanism (W3 D4).
-history:
-  # Default export destination for meeting transcripts ("" = ask every time).
-  # Export is the only off-corpus path; a configured default just pre-fills
-  # the destination — the dashboard panel and the CLI DIR argument still
-  # override it.
-  export_dir: ""
-  # Cloud Q&A consent (W1): asking about your stored meetings runs on the
-  # configured LOCAL Ollama model by default, and answers are rendered in the
-  # history window — never spoken (the only TTS in the stack is cloud-hosted,
-  # which would be an unconsented egress path). Sending question excerpts to
-  # the cloud additionally requires this explicit flag; it stays separate
-  # from meeting.cloud_consent on purpose.
-  cloud_qa_consent: false
-
-# Auto-Restart Supervisor (W2)
-# When enabled, `python main.py` runs the assistant as a supervised child and
-# restarts it after an unhandled crash. All child output — including the Wave 0
-# crash-capture tracebacks — is appended to the log file below for diagnosis.
-# After max_restarts crashes within window_seconds the supervisor gives up
-# instead of looping forever. Run once without supervision: python main.py --no-supervisor
-supervisor:
-  enabled: true
-  max_restarts: 5
-  window_seconds: 60
-  backoff_seconds: 1
-  backoff_max_seconds: 30
