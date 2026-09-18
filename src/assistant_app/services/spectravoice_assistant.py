@@ -24,6 +24,11 @@ from assistant_app.io.vision.screen_capture import ScreenCapture
 from assistant_app.services.dictation import DictationController, prune_persisted_clips
 from assistant_app.services.meeting import MeetingController, run_startup_cleanup
 from assistant_app.services.meeting_summary import build_summarizer
+from assistant_app.services.refusals import (
+    MEETING_CONSENT_REFUSAL_MESSAGE,
+    MEETING_DISABLED_MESSAGE,
+    ask_failure_message,
+)
 from assistant_app.services.transcription import TranscriptionWorker
 from assistant_app.utils.config import ConfigManager, get_config_manager
 from assistant_app.utils.logging_config import get_logger
@@ -89,7 +94,24 @@ class AssistantHUDActions:
         return d.activation if d is not None else "off"
 
     def toggle_meeting(self) -> None:
-        self._assistant.toggle_meeting()
+        refusal = self._assistant.toggle_meeting()
+        if refusal:
+            # W2 S2: the refusal is user-visible, not log-only.
+            self._show_refusal_alert("Meeting recording", refusal)
+
+    def _show_refusal_alert(self, title: str, message: str) -> None:
+        """Render a refusal as an NSAlert (momentary main-thread UI — the
+        allowed AppKit surface). The terminal already printed the same
+        message, so off-darwin (no AppKit) logs instead of failing silently."""
+        try:
+            from AppKit import NSAlert
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.runModal()
+        except ImportError:
+            self._assistant.logger.warning(f"🚫 {title}: {message}")
 
     def pause_meeting(self) -> None:
         self._assistant.toggle_meeting_pause()
@@ -426,7 +448,17 @@ class SpectraVoiceAssistant:
         except ValueError as exc:
             self.logger.warning(f"🚫 History Q&A refused: {exc}")
             return history_qa.HistoryAnswer(status="refused", answer=str(exc))
-        answer = engine.ask(question, live_meeting_ids=self.live_meeting_ids())
+        try:
+            answer = engine.ask(question, live_meeting_ids=self.live_meeting_ids())
+        except Exception as exc:
+            # W2 S2: surfaced, never swallowed — the log keeps the traceback,
+            # the user gets one actionable sentence (e.g. Ollama down).
+            self.logger.exception("History Q&A failed")
+            llm_cfg = self.config_manager.config.llm
+            return history_qa.HistoryAnswer(
+                status="error",
+                answer=ask_failure_message(exc, ollama_url=llm_cfg.ollama_url, ollama_model=llm_cfg.ollama_model),
+            )
         self.logger.info(f"💬 History Q&A answered from {len(answer.meetings_used)} stored meeting(s)")
         return answer
 
@@ -976,14 +1008,18 @@ class SpectraVoiceAssistant:
         self.hud_state.set_meeting("paused" if m.paused else "recording")
         self.hud_state.set_activity(Activity.MEETING)
 
-    def toggle_meeting(self) -> None:
+    def toggle_meeting(self) -> str | None:
         """Explicit per-meeting start/stop (D2): --meeting, the HUD menu, and
         the meeting_toggle hotkey all land here — the controller refuses
-        anything the consent gate does not allow."""
+        anything the consent gate does not allow.
+
+        W2 S2: returns the user-visible refusal message when refused (the
+        HUD menu renders it as an alert), None on success — the hotkey and
+        CLI launch paths ignore the return value as before."""
         m = self.meeting
         if m is None:
             self.logger.warning("🚫 Meeting mode is disabled (meeting.enabled: false)")
-            return
+            return MEETING_DISABLED_MESSAGE
         if m.recording:
             result = m.stop()
             if result is not None:
@@ -991,8 +1027,11 @@ class SpectraVoiceAssistant:
                     f"🏛️ Meeting saved: {result['utterances']} utterance(s), "
                     f"{result['gaps']} gap(s) → {result['meeting_dir']}"
                 )
-        elif m.start():
+            return None
+        if m.start():
             print("🏛️ Meeting recording started — everything stays on this device")
+            return None
+        return MEETING_CONSENT_REFUSAL_MESSAGE
 
     def toggle_meeting_pause(self) -> None:
         """Pause/resume the running meeting; skipped speech becomes a gap."""
