@@ -436,6 +436,7 @@ class SpectraVoiceAssistant:
             live_meeting_ids=self.live_meeting_ids(),
             last_sweep=self._last_sweep,
             cloud_qa_consent=cfg.history.cloud_qa_consent,
+            tool_log=self.get_tool_execution_log(),  # S4: audit tail in the dashboard
         )
 
     def history_summary_text(self, meeting_id: str) -> str:
