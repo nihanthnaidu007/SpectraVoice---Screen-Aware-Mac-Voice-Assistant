@@ -69,9 +69,7 @@ class TestViewModel:
         assert snapshot.meetings == ()
 
     def test_live_meeting_marking_flows_through_the_model(self, tmp_path):
-        cfg = type(
-            "Cfg", (), {"audio_dir": str(tmp_path / "corpus"), "retention_hours": 0.0, "language": "english"}
-        )()
+        cfg = type("Cfg", (), {"audio_dir": str(tmp_path / "corpus"), "retention_hours": 0.0, "language": "english"})()
         paths = ms.open_meeting(cfg, time.time())
         snapshot = build_history_snapshot(
             cfg,
@@ -126,9 +124,14 @@ class TestViewModel:
 
     def test_consent_lines_state_all_three_gates(self):
         lines = format_consent_lines(ConsentState(True, False, False))
-        assert len(lines) == 2  # recording line carries both kill-switch AND armed state
+        assert len(lines) == 3  # meeting line carries kill-switch AND armed; screen; QA
         assert "not armed" in lines[0].lower()
         assert "off" in lines[1].lower()
+        assert "local-only" in lines[2].lower()  # W1: cloud QA off unless consented
+
+    def test_consent_lines_name_cloud_qa_consent_when_granted(self):
+        lines = format_consent_lines(ConsentState(True, False, False, cloud_qa_consent=True))
+        assert "cloud allowed" in lines[2].lower()
 
     def test_retention_line_mentions_last_sweep(self):
         line = format_retention_line(RetentionState(0.0, last_sweep_removed=4, last_sweep_at=1_000.0))
@@ -228,11 +231,25 @@ class TestMenubarStructure:
 
     def test_history_selector_dispatches_open_history(self):
         tree = ast.parse(self._source())
-        handlers = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "onHistory_"
-        ]
+        handlers = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "onHistory_"]
         assert len(handlers) == 1
         body_source = ast.unparse(handlers[0])
         assert "open_history" in body_source
+
+    def test_ask_history_item_sits_between_history_and_settings(self):
+        # W1 D2: the ask entry point lives with the history items — after the
+        # dashboard item, before Settings.
+        source = self._source()
+        history_pos = source.index('"History')
+        ask_pos = source.index('"Ask History')
+        settings_pos = source.index('"Settings')
+        assert history_pos < ask_pos < settings_pos
+
+    def test_ask_history_selector_dispatches_ask_history(self):
+        tree = ast.parse(self._source())
+        handlers = [
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "onAskHistory_"
+        ]
+        assert len(handlers) == 1
+        body_source = ast.unparse(handlers[0])
+        assert "ask_history" in body_source

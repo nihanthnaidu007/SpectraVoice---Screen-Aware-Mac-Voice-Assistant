@@ -78,6 +78,9 @@ class _RecordingStub:
     def open_history(self) -> None:
         self.calls.append("open_history")
 
+    def ask_history(self) -> None:
+        self.calls.append("ask_history")
+
     def quit(self) -> None:
         self.calls.append("quit")
 
@@ -167,6 +170,7 @@ class TestHUDActionsSurface:
             "pause_meeting",
             "open_settings",
             "open_history",
+            "ask_history",
             "quit",
         ):
             assert callable(getattr(stub, name)), name
@@ -179,6 +183,11 @@ class TestHUDActionsSurface:
         # W4 D2: the History… menu item dispatches open_history — a missing
         # method is a main-thread AttributeError on a real Mac.
         assert callable(getattr(HUDActions, "open_history", None))
+
+    def test_protocol_declares_ask_history_action(self):
+        # W1 D2: the Ask History… menu item dispatches ask_history — a missing
+        # method is a main-thread AttributeError on a real Mac.
+        assert callable(getattr(HUDActions, "ask_history", None))
 
 
 class TestMeetingCLIFlag:
@@ -235,6 +244,6 @@ class TestRoutingIsolation:
     def test_meeting_module_imports_are_light(self):
         for rel_path in self.MEETING_MODULES:
             for module in self._module_imports(rel_path):
-                assert not module.startswith(
-                    "assistant_app.io."
-                ), f"{rel_path} imports {module} — audio/vision I/O must stay lazy"
+                assert not module.startswith("assistant_app.io."), (
+                    f"{rel_path} imports {module} — audio/vision I/O must stay lazy"
+                )

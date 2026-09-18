@@ -30,8 +30,8 @@ from assistant_app.utils.logging_config import get_logger
 
 # GUI mode imports (lazy loaded)
 
-os.environ.setdefault('PYTHONWARNINGS', 'ignore')
-warnings.filterwarnings('ignore', category=DeprecationWarning)
+os.environ.setdefault("PYTHONWARNINGS", "ignore")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Greeting messages (avoid importing random for just this)
 _GREETINGS = (
@@ -102,6 +102,13 @@ class AssistantHUDActions:
 
         open_history_window(self._assistant)
 
+    def ask_history(self) -> None:
+        # Same darwin-only window as open_history; the ask entry point focuses
+        # the question field (the window's only new AppKit surface, W1 D2).
+        from assistant_app.hud.history_window import open_history_window
+
+        open_history_window(self._assistant, focus_question=True)
+
     def quit(self) -> None:
         self._assistant.request_shutdown()
 
@@ -114,7 +121,7 @@ class PerformanceMetrics:
     total_latency: float = 0.0
     handback_time: float = 0.0  # time the audio callback held the recognizer thread
     interaction_count: int = 0
-    
+
     def reset(self) -> None:
         self.transcription_time = self.api_response_time = self.tts_time = 0.0
         self.total_latency = self.handback_time = 0.0
@@ -123,24 +130,24 @@ class PerformanceMetrics:
 class SpectraVoiceAssistant:
     """
     SpectraVoice with barge-in support.
-    
+
     Barge-in allows users to interrupt the assistant while it's speaking.
     The assistant will stop speaking and respond to the new query.
-    
+
     Noise Protection (Step 6):
     - Only valid speech (passes SmartVoiceDetector) triggers barge-in
     - Minimum confidence threshold prevents noise from interrupting
     - Echo filtering prevents assistant from hearing itself
     """
-    
+
     def __init__(
-        self, 
-        mode: str = "terminal", 
-        debug: bool = False, 
-        voice: str | None = None, 
+        self,
+        mode: str = "terminal",
+        debug: bool = False,
+        voice: str | None = None,
         whisper_model: str | None = None,
-        llm_config = None,  # LLMConfig from assistant_app.llm (deprecated)
-        llm_provider = None,  # Pre-validated LLMProvider instance
+        llm_config=None,  # LLMConfig from assistant_app.llm (deprecated)
+        llm_provider=None,  # Pre-validated LLMProvider instance
         enable_barge_in: bool | None = None,  # None = use config value
         config_manager: ConfigManager | None = None,  # None = global instance
         dictation_enabled: bool | None = None,  # None = use config value
@@ -152,12 +159,12 @@ class SpectraVoiceAssistant:
         self.config_manager = config_manager or get_config_manager()
         cfg = self.config_manager.config
         profile = cfg.mode_profile(mode)
-        
+
         self.mode, self.running = mode, True
         self.debug = debug
         self.logger = get_logger(__name__)
         self.metrics = PerformanceMetrics()
-        
+
         # === BARGE-IN CONFIGURATION (config `barge_in:` section) ===
         # Tuned for responsive interruption while filtering pure noise
         self.enable_barge_in = cfg.barge_in.enabled if enable_barge_in is None else enable_barge_in
@@ -170,28 +177,32 @@ class SpectraVoiceAssistant:
         # live. Registered on the ConfigManager change dispatcher shared with
         # reload(); the taxonomy is settings_model.HOT_APPLY_KEYS (keep in sync).
         self.config_manager.on_reload(self._on_config_changed)
-        
+
         self.whisper_model = whisper_model or profile.whisper_model
         self.voice = voice or cfg.voice.tts_voice
         self.mic_config = cfg.microphone
-        
+
         self.screen_capture = ScreenCapture(
             quality=profile.screen_quality,
             scale_factor=profile.screen_scale,
             refresh_interval=cfg.screen.refresh_interval,
             cache_duration=cfg.screen.cache_duration,
         )
-        
+
         # Privacy: screen content leaves the machine only with explicit consent
         # (SPECTRAVOICE_SCREEN_CONSENT, default OFF) and while not paused.
         self.privacy_consent = PrivacyConsent.from_env()
-        
+
         # Initialize assistant with provider or config
         if llm_provider is not None:
-            self.assistant = Assistant(max_tokens=profile.max_tokens, provider=llm_provider, privacy_consent=self.privacy_consent)
+            self.assistant = Assistant(
+                max_tokens=profile.max_tokens, provider=llm_provider, privacy_consent=self.privacy_consent
+            )
         else:
-            self.assistant = Assistant(max_tokens=profile.max_tokens, llm_config=llm_config, privacy_consent=self.privacy_consent)
-        
+            self.assistant = Assistant(
+                max_tokens=profile.max_tokens, llm_config=llm_config, privacy_consent=self.privacy_consent
+            )
+
         self.tts = TextToSpeech(
             voice=self.voice,
             hd_quality=cfg.tts.hd_quality,
@@ -213,11 +224,11 @@ class SpectraVoiceAssistant:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         atexit.register(stop_indicator)
-        
+
         # Connect screen capture to tool executor for click verification
         if self.assistant.tool_executor:
             self.assistant.tool_executor.set_screen_capture(self.screen_capture)
-        
+
         # Set up TTS callbacks for barge-in and completion tracking
         self.tts.set_on_interrupted(self._on_tts_interrupted)
         self.tts.set_on_complete(self._on_tts_complete)
@@ -229,9 +240,7 @@ class SpectraVoiceAssistant:
         # safety-stop apply to dictation exactly as to any other automation.
         global _active_tool_executor
         _active_tool_executor = self.assistant.tool_executor
-        self.dictation_enabled = (
-            cfg.dictation.enabled if dictation_enabled is None else dictation_enabled
-        )
+        self.dictation_enabled = cfg.dictation.enabled if dictation_enabled is None else dictation_enabled
         self._dictation_hotkey_listener: DictationHotkeyListener | None = None
         self.dictation: DictationController | None = None
         if self.dictation_enabled:
@@ -273,7 +282,7 @@ class SpectraVoiceAssistant:
                 on_status=self._on_meeting_status,
                 summarize=self._build_meeting_summarizer(cfg.meeting),
             )
-        
+
     def _on_dictated_text(self, text: str) -> None:
         """DictationController success callback (insert thread)."""
         self.metrics.interaction_count += 1
@@ -292,12 +301,12 @@ class SpectraVoiceAssistant:
                 self._hud.request_terminate()
             except Exception:
                 self.logger.exception("HUD terminate failed — continuing teardown")
-    
+
     def pause_screen_sharing(self) -> None:
         """Runtime privacy toggle: stop sending screen content to the LLM."""
         self.privacy_consent.pause()
         self.logger.info("🔒 Screen sharing paused — queries run without vision")
-    
+
     def resume_screen_sharing(self) -> None:
         """Clear the runtime pause (only effective if consent is granted)."""
         self.privacy_consent.resume()
@@ -305,7 +314,7 @@ class SpectraVoiceAssistant:
             self.logger.info("🔓 Screen sharing resumed")
         else:
             self.logger.info("🔒 Pause cleared — screen sharing still off (no consent)")
-    
+
     def toggle_mute(self) -> None:
         """Hotkey/HUD mute toggle — suppresses TTS output only; consent and
         screen behavior are untouched."""
@@ -354,6 +363,7 @@ class SpectraVoiceAssistant:
             self.privacy_consent,
             live_meeting_ids=self.live_meeting_ids(),
             last_sweep=self._last_sweep,
+            cloud_qa_consent=cfg.history.cloud_qa_consent,
         )
 
     def history_summary_text(self, meeting_id: str) -> str:
@@ -361,6 +371,29 @@ class SpectraVoiceAssistant:
         from assistant_app.services import history_search
 
         return history_search.read_summary_text(self.config_manager.config.meeting, meeting_id)
+
+    def history_ask(self, question: str):
+        """Answer a question about stored meetings (worker-thread caller).
+
+        The QA engine is built PER ASK so the two-switch consent gate re-reads
+        config every time — a consent or provider change applies on the next
+        ask without a restart (defense in depth: the builder's ValueError IS
+        the ask-time check). Cloud without history.cloud_qa_consent is
+        rendered as a visible refusal, never a traceback and never a silent
+        local fallback. The answer is DISPLAY-ONLY: it is never spoken (the
+        only TTS in the stack is cloud-hosted — speaking would be an
+        unconsented egress path) and never fed into the assistant pipeline.
+        """
+        from assistant_app.services import history_qa
+
+        try:
+            engine = history_qa.build_history_qa(self.config_manager.config)
+        except ValueError as exc:
+            self.logger.warning(f"🚫 History Q&A refused: {exc}")
+            return history_qa.HistoryAnswer(status="refused", answer=str(exc))
+        answer = engine.ask(question, live_meeting_ids=self.live_meeting_ids())
+        self.logger.info(f"💬 History Q&A answered from {len(answer.meetings_used)} stored meeting(s)")
+        return answer
 
     def history_export_meeting(self, meeting_id: str, dest_dir: str) -> str:
         """Copy one meeting's directory to the user-chosen destination."""
@@ -400,7 +433,7 @@ class SpectraVoiceAssistant:
         self.logger.debug(f"📊 Barge-in count: {self._barge_in_count}")
         # Update indicator when interrupted
         self._update_status("Listening")
-    
+
     def _on_tts_complete(self, was_interrupted: bool) -> None:
         """Callback when TTS finishes (either normally or interrupted)."""
         if not was_interrupted:
@@ -412,7 +445,7 @@ class SpectraVoiceAssistant:
     def _audio_callback(self, recognizer, audio) -> None:
         """
         Callback for background voice recognition.
-        
+
         Runs in a fresh thread from speech_recognition's listener. It only hands
         the utterance to the transcription pipeline and returns: with the
         TranscriptionWorker, recognize_whisper no longer holds this thread
@@ -422,7 +455,7 @@ class SpectraVoiceAssistant:
         """
         cb_start = time.time()
         self.metrics.reset()
-        
+
         # === MEETING ROUTING (W3, R8) ===
         # While a meeting is recording, the clip belongs to the meeting — it
         # never reaches dictation retention or the screen-aware pipeline.
@@ -432,22 +465,22 @@ class SpectraVoiceAssistant:
         if self.meeting is not None and self.meeting.recording:
             self.meeting.on_clip(audio, spoken_at=cb_start)
             return
-        
+
         # Dictation audio retention: default policy keeps clips in memory for
         # the session only (persist_audio=false → this call discards them).
         if self.dictation is not None and self.dictation.armed:
             self.dictation.record_audio(audio, cb_start)
-        
+
         if self.mic_config.inline_transcription:
             self._transcribe_and_handle(recognizer, audio, cb_start)
             return
-        
+
         worker = self._transcription_worker
         if worker is None or not worker.submit(audio, spoken_at=cb_start):
             self.logger.warning("🔇 Transcription queue full — dropping utterance")
             return
         self.metrics.handback_time = time.time() - cb_start
-    
+
     def _transcribe_and_handle(self, recognizer, audio, spoken_at: float) -> None:
         """Inline path (legacy): transcribe on the calling thread, then handle."""
         try:
@@ -458,10 +491,10 @@ class SpectraVoiceAssistant:
             self.logger.error(f"❌ Transcription failed: {e}")
             return
         self._handle_prompt(prompt, spoken_at)
-    
+
     def _recognize(self, recognizer, audio) -> str:
         """Run Whisper on the audio. Raises on recognition failure.
-        
+
         Pure transcription — transcript dispatch (_handle_prompt) belongs to the
         caller, so the inline path and the TranscriptionWorker share one entry
         point without handling the transcript twice.
@@ -472,14 +505,14 @@ class SpectraVoiceAssistant:
             return recognizer.recognize_whisper(audio, model=self.whisper_model, language="english")
         finally:
             self.metrics.transcription_time = time.time() - trans_start
-    
+
     def _handle_prompt(self, prompt: str, spoken_at: float) -> None:
         """Validate a transcript and run the LLM + TTS response pipeline.
-        
+
         Barge-in Logic (Step 4):
         - If TTS is playing and valid speech is detected → stop TTS
         - Process new speech as a new query (old response abandoned)
-        
+
         Noise Protection (Step 6):
         - Requires minimum confidence (barge_in.min_confidence)
         - Requires minimum word count (barge_in.min_words)
@@ -501,9 +534,9 @@ class SpectraVoiceAssistant:
             # === BARGE-IN CHECK ===
             # Check if TTS is playing BEFORE validating speech
             is_tts_playing = self.tts.is_playing
-            
+
             is_valid, reason, confidence = self.voice_detector.is_valid(prompt)
-            
+
             if not is_valid:
                 # Log TTS echo rejections at info level for debugging
                 if reason == "tts_echo":
@@ -511,13 +544,13 @@ class SpectraVoiceAssistant:
                 elif reason not in ("empty", "self_echo", "echo_cooldown"):
                     self.logger.debug(f"🔇 Ignored ({reason}): '{prompt}'")
                 return
-            
+
             # === STRICT NOISE PROTECTION FOR BARGE-IN ===
             # Only trigger barge-in for HIGH-confidence, multi-word, substantial speech
             # This prevents random noise/hallucinations from cancelling TTS
             word_count = len(prompt.split())
             char_count = len(prompt)
-            
+
             # All conditions must be met for barge-in
             barge_in_conditions = {
                 "tts_playing": is_tts_playing,
@@ -527,7 +560,7 @@ class SpectraVoiceAssistant:
                 "chars": char_count >= self._barge_min_chars,
             }
             should_barge_in = all(barge_in_conditions.values())
-            
+
             # === BARGE-IN TRIGGER ===
             if should_barge_in:
                 self._barge_in_count += 1
@@ -543,60 +576,60 @@ class SpectraVoiceAssistant:
                 )
                 # Don't process this as a query - let TTS continue
                 return
-            
+
             # Normalize input to correct mishearings
             normalized_prompt = self.voice_detector.normalize_input(prompt)
             if normalized_prompt != prompt:
                 self.logger.debug(f"🔧 Normalized: '{prompt}' → '{normalized_prompt}'")
                 prompt = normalized_prompt
-            
+
             self.logger.info(f"🎤 User ({confidence:.0%}): {prompt}")
-            
+
             # Update indicator to show we're processing
             self._update_status("Thinking")
-            
+
             image_data = self.screen_capture.get_encoded()
             if not image_data:
                 self.logger.error("❌ No screen data available")
                 self._update_status("Listening")
                 return
-            
+
             self.logger.info("👁️ Analyzing screen...")
-            
+
             api_start = time.time()
             response = self.assistant.process(prompt, image_data)
             self.metrics.api_response_time = time.time() - api_start
-            
+
             if response:
                 self.logger.info(f"🤖 Assistant: {response}")
-                
+
                 # Record metrics before starting async TTS
                 self.metrics.total_latency = time.time() - total_start
                 self.metrics.interaction_count += 1
-                
+
                 self.logger.debug(
                     f"⏱️ Performance: Trans={self.metrics.transcription_time:.2f}s, "
                     f"API={self.metrics.api_response_time:.2f}s, "
                     f"Handback={self.metrics.handback_time * 1000:.1f}ms, "
                     f"Total (pre-TTS)={self.metrics.total_latency:.2f}s"
                 )
-                
+
                 # === ASYNC TTS - NON-BLOCKING ===
                 # Start speaking in background thread so we can continue listening
                 # The callback returns immediately, allowing new speech detection
                 # TTS completion/interruption is handled via callbacks
                 self._update_status("Speaking")
-                
+
                 # Record what we're about to say for echo detection
                 # This prevents the mic from picking up our own TTS and triggering barge-in
                 self.voice_detector.mark_tts_start(response)
-                
+
                 if self.tts_muted or self._meeting_tts_blocked():
                     self.logger.info("🔇 Muted — response not spoken")
                     self._update_status("Listening")
                     return
                 self.tts.speak_async(response)
-                
+
                 # NOTE: We return here immediately!
                 # The _on_tts_complete callback will handle:
                 # - Marking TTS complete for echo filtering
@@ -604,12 +637,11 @@ class SpectraVoiceAssistant:
             else:
                 self.logger.warning("❌ No response generated")
                 self._update_status("Listening")
-                
+
         except Exception as e:
             self.logger.error(f"❌ Audio error: {e}")
             self._update_status("Listening")
 
-    
     def _open_microphone(self, recognizer: Recognizer) -> Microphone:
         """Open the configured input device, falling back to the system default on failure."""
         mic = self.mic_config
@@ -631,34 +663,34 @@ class SpectraVoiceAssistant:
             with microphone as source:
                 recognizer.adjust_for_ambient_noise(source, duration=mic.ambient_noise_seconds)
             return microphone
-    
+
     def _on_transcription_error(self, exc: Exception, _job) -> None:
         """TranscriptionWorker error callback."""
         if isinstance(exc, UnknownValueError):
             return  # no speech found in the audio clip — normal
         self.logger.error(f"❌ Transcription failed: {exc}")
-    
+
     def run(self) -> None:
         self.logger.info(f"🚀 SpectraVoice Starting ({self.mode.upper()} mode)")
         self.logger.info(f"🎙️ Voice: {self.voice} | Whisper: {self.whisper_model}")
         print("=" * 50)
-        
+
         self.logger.info("🎤 Setting up microphone...")
         recognizer = Recognizer()
         mic = self.mic_config
         recognizer.energy_threshold = mic.energy_threshold
         recognizer.dynamic_energy_threshold = mic.dynamic_energy_threshold
         recognizer.pause_threshold = mic.pause_threshold
-        
+
         microphone = self._open_microphone(recognizer)
-        
+
         # Create the menu-bar HUD (darwin-only; None elsewhere) before the
         # listen loop so the icon reflects the initial listening state.
         self._hud = create_menu_bar_hud(self.hud_state, AssistantHUDActions(self))
-        
+
         self.logger.info("📸 Starting screen capture...")
         self.screen_capture.start()
-        
+
         # Move Whisper off the audio-callback thread: transcription runs on a
         # dedicated worker while the recognizer loop keeps listening.
         if not mic.inline_transcription:
@@ -667,11 +699,11 @@ class SpectraVoiceAssistant:
                 on_result=lambda text, job: self._handle_prompt(text, job.spoken_at),
                 on_error=self._on_transcription_error,
             ).start()
-        
+
         self.logger.info("👂 Starting voice recognition...")
         self._recognizer, self._microphone = recognizer, microphone
         self.start_listening()
-        
+
         # Start dictation (controller + optional global hotkeys) before the
         # indicator so the status line reflects the dictation session.
         if self.dictation is not None:
@@ -683,10 +715,10 @@ class SpectraVoiceAssistant:
         # inside the controller's start()).
         if self.meeting is not None and self.meeting_start:
             self.toggle_meeting()
-        
+
         # Start on-screen status indicator (non-blocking)
         start_indicator("Listening")
-        
+
         self.logger.info("✅ READY! SpectraVoice is listening...")
         if self.privacy_consent.screen_upload_allowed:
             print("👁️ Screen sharing is ON — screenshots are sent to your LLM provider with each query")
@@ -699,7 +731,9 @@ class SpectraVoiceAssistant:
         if self.dictation is not None:
             print(f"📝 Dictation ON — {self.dictation.status_line()}")
             print("   Speech is transcribed locally and typed at your cursor; nothing leaves this machine")
-            print("   Audio is not kept after this session (set dictation.persist_audio: true in config.yaml to change)")
+            print(
+                "   Audio is not kept after this session (set dictation.persist_audio: true in config.yaml to change)"
+            )
             hotkeys_cfg = self.config_manager.config.hotkeys
             if self.dictation.activation == "push_to_talk":
                 print(f"🎤 Push-to-talk: hold the '{hotkeys_cfg.push_to_talk}' key while speaking")
@@ -716,9 +750,9 @@ class SpectraVoiceAssistant:
                 )
         print("🛑 Press Ctrl+C to quit")
         print("=" * 50)
-        
+
         self._speak_greeting()
-        
+
         try:
             if self._hud is not None:
                 self._run_hud_mode()
@@ -728,11 +762,11 @@ class SpectraVoiceAssistant:
                 self._run_terminal_mode()
         finally:
             self._cleanup()
-    
+
     def _speak_greeting(self) -> None:
         """Analyze screen silently first, then speak greeting."""
         self.logger.info("👁️ Pre-analyzing screen context...")
-        
+
         # Wait for screen capture to produce at least one frame
         image_data = None
         for _ in range(20):  # up to 2 seconds
@@ -740,21 +774,21 @@ class SpectraVoiceAssistant:
             if image_data:
                 break
             time.sleep(0.1)
-        
+
         if image_data:
             try:
                 self.assistant.process(
                     "Note what's on screen silently. Remember it for context. Reply with just 'Ready' and nothing else.",
-                    image_data
+                    image_data,
                 )
                 self.logger.info("✅ Screen context loaded")
             except Exception as e:
                 self.logger.debug(f"⚠️ Pre-analysis skipped: {e}")
         else:
             self.logger.warning("⚠️ Screen capture not ready, skipping pre-analysis")
-        
+
         greeting = _GREETINGS[int(time.time()) % len(_GREETINGS)]
-        
+
         self.logger.info(f"🤖 {greeting}")
         try:
             self.voice_detector.mark_tts_start(greeting)
@@ -765,15 +799,15 @@ class SpectraVoiceAssistant:
             self.voice_detector.mark_tts_complete()
         except Exception as e:
             self.logger.warning(f"⚠️ Could not speak greeting: {e}")
-    
+
     def _cleanup(self) -> None:
         self.logger.info("🔄 Cleaning up...")
-        
+
         # Stop the status indicator
         stop_indicator()
-        
+
         self.stop_listening_now()
-        
+
         cleanups = [
             lambda: self._transcription_worker.stop() if self._transcription_worker else None,
             lambda: self._dictation_hotkey_listener.stop() if self._dictation_hotkey_listener else None,
@@ -790,6 +824,7 @@ class SpectraVoiceAssistant:
         if self.mode == "gui":
             try:
                 import cv2
+
                 cv2.destroyAllWindows()
             except Exception:
                 pass
@@ -827,9 +862,7 @@ class SpectraVoiceAssistant:
         if self._recognizer is None or self._microphone is None:
             self.logger.warning("⚠️ Listen toggle before audio setup — ignoring")
             return
-        self._stop_listening_fn = self._recognizer.listen_in_background(
-            self._microphone, self._audio_callback
-        )
+        self._stop_listening_fn = self._recognizer.listen_in_background(self._microphone, self._audio_callback)
         self.hud_state.set_activity(Activity.LISTENING)
         self.logger.info("👂 Listening started")
 
@@ -861,9 +894,7 @@ class SpectraVoiceAssistant:
         elif d.inserting:
             self.hud_state.set_dictation("inserting")
         elif d.armed:
-            self.hud_state.set_dictation(
-                "ptt-held" if d.activation == "push_to_talk" else "vad-active"
-            )
+            self.hud_state.set_dictation("ptt-held" if d.activation == "push_to_talk" else "vad-active")
         else:
             self.hud_state.set_dictation(None)
 
@@ -876,9 +907,7 @@ class SpectraVoiceAssistant:
         cfg = self.config_manager.config.meeting
         if self._recognizer is None:
             raise RuntimeError("meeting transcription before audio setup")
-        return self._recognizer.recognize_whisper(
-            audio, model=self.whisper_model, language=cfg.language
-        )
+        return self._recognizer.recognize_whisper(audio, model=self.whisper_model, language=cfg.language)
 
     def _build_meeting_summarizer(self, meeting_cfg) -> Callable[[list[dict]], tuple[str, dict]] | None:
         """Local-first summarizer on the LLMProvider seam; a misconfigured
@@ -944,9 +973,7 @@ class SpectraVoiceAssistant:
         """HUD mode: the menu-bar HUD owns the main thread (spec D1.1) —
         NSApplication.run() blocks until request_terminate(). The 1 Hz clock
         (VAD poll + heartbeat) moves off the main thread to keep the UI live."""
-        threading.Thread(
-            target=self._background_clock_loop, name="sv-clock", daemon=True
-        ).start()
+        threading.Thread(target=self._background_clock_loop, name="sv-clock", daemon=True).start()
         self._hud.run()
 
     def _background_clock_loop(self) -> None:
@@ -983,35 +1010,36 @@ class SpectraVoiceAssistant:
                 extra = f", transcribed: {stats.completed}, dropped: {stats.dropped}" if stats else ""
                 self.logger.info(f"💓 SpectraVoice active... (interactions: {self.metrics.interaction_count}{extra})")
                 last_heartbeat = time.time()
-    
+
     def _run_gui_mode(self) -> None:
         """Run in GUI mode with visual status window."""
         import math
 
         import cv2
         import numpy as np
-        
+
         status_window = np.zeros((250, 500, 3), dtype=np.uint8)
-        
+
         while self.running:
             display = status_window.copy()
-            
-            cv2.putText(display, "SpectraVoice", (50, 50), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(display, "Status: LISTENING", (50, 90), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            cv2.putText(display, f"Mode: {self.mode.upper()}", (50, 120), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
-            cv2.putText(display, "Speak naturally to interact", (50, 160), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-            cv2.putText(display, "Press 'q' or ESC to quit", (50, 220), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 255), 1)
-            
+
+            cv2.putText(display, "SpectraVoice", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(display, "Status: LISTENING", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.putText(
+                display, f"Mode: {self.mode.upper()}", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1
+            )
+            cv2.putText(
+                display, "Speak naturally to interact", (50, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1
+            )
+            cv2.putText(
+                display, "Press 'q' or ESC to quit", (50, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 255), 1
+            )
+
             pulse = int(50 + 30 * abs(math.sin(time.time() * 3)))
             cv2.circle(display, (420, 50), 15, (0, pulse, 0), -1)
-            
+
             cv2.imshow("SpectraVoice", display)
-            
+
             if cv2.waitKey(100) in [27, ord("q")]:
                 self.running = False
                 break

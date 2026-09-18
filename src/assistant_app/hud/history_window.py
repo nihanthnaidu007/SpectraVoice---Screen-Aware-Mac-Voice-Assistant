@@ -31,6 +31,7 @@ from assistant_app.hud.history_model import (
     format_history_snapshot,
     format_meeting_line,
 )
+from assistant_app.services.history_qa import format_answer
 from assistant_app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -73,12 +74,13 @@ _DETAILS_H = 180.0
 MAX_RENDERED_MEETINGS = 100
 
 # The provider duck-types SpectraVoiceAssistant: config_manager (for the
-# history.export_dir prefill) plus the thin W4 adapter methods:
+# history.export_dir prefill) plus the thin W4/W1 adapter methods:
 #   history_snapshot() -> HistorySnapshot        (worker-thread caller)
 #   history_summary_text(meeting_id) -> str      (worker-thread caller)
 #   history_export_meeting(meeting_id, dest) -> str
 #   history_delete_meeting(meeting_id) -> None   (raises on failure)
 #   history_delete_all() -> int                  (raises on failure)
+#   history_ask(question) -> HistoryAnswer       (worker-thread caller; W1)
 
 
 class _HistoryController(NSObject):
@@ -93,6 +95,7 @@ class _HistoryController(NSObject):
         controller._provider = provider
         controller._snapshot: HistorySnapshot | None = None
         controller._details = None
+        controller._question = None
         controller._delete_all_box = None
         controller._delete_all_button = None
         controller.window = None
@@ -132,11 +135,16 @@ class _HistoryController(NSObject):
         self._set_document_text("History loads in a moment — scanning the local corpus off-thread…")
 
     def _set_document_text(self, text: str, meetings: tuple[dict, ...] = ()) -> None:
-        """Rebuild the document view: header text + one action row per meeting."""
+        """Rebuild the document view: ask row + header + one row per meeting."""
         content = NSStackView.alloc().init()
         content.setOrientation_(NSUserInterfaceLayoutOrientationVertical)
         content.setSpacing_(4)
         content.setEdgeInsets_(NSEdgeInsetsMake(16, 16, 16, 16))
+
+        # W1 D2: the question row is part of EVERY rebuild so it survives
+        # snapshot refreshes; typed text is preserved across rebuilds.
+        question_text = self._question.stringValue() if self._question is not None else ""
+        content.addArrangedSubview_(self._ask_row(question_text or ""))
 
         header = NSTextField.labelWithString_(text)
         header.setFont_(NSFont.systemFontOfSize_(11))
@@ -183,9 +191,7 @@ class _HistoryController(NSObject):
         def work() -> None:
             try:
                 snapshot = self._provider.history_snapshot()
-                self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    "applySnapshot:", snapshot, False
-                )
+                self.performSelectorOnMainThread_withObject_waitUntilDone_("applySnapshot:", snapshot, False)
             except Exception as exc:  # surfaced in the window, never silent
                 logger.exception("History snapshot failed")
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
@@ -193,6 +199,30 @@ class _HistoryController(NSObject):
                 )
 
         threading.Thread(target=work, name="sv-history-scan", daemon=True).start()
+
+    def askAction_(self, sender) -> None:
+        """The W1 ask: dispatch the question off-thread (H1 — no LLM/scan IO
+        on the main thread); the finished answer renders via applyDetails_."""
+        question = ""
+        if self._question is not None:
+            question = (self._question.stringValue() or "").strip()
+        if not question:
+            self.applyDetails_("Type a question about your stored meetings first.")
+            return
+        provider = self._provider
+        self.applyDetails_("Searching your stored meetings…")
+
+        def work() -> None:
+            try:
+                answer = provider.history_ask(question)
+                self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "applyDetails:", format_answer(answer), False
+                )
+            except Exception as exc:  # surfaced in the window, never silent
+                logger.exception("History Q&A failed")
+                self.performSelectorOnMainThread_withObject_waitUntilDone_("applyDetails:", f"Ask failed: {exc}", False)
+
+        threading.Thread(target=work, name="sv-history-ask", daemon=True).start()
 
     def viewSummaryAction_(self, sender) -> None:
         meeting_id = self._meeting_id(sender)
@@ -204,9 +234,7 @@ class _HistoryController(NSObject):
             try:
                 summary = provider.history_summary_text(meeting_id)
                 text = summary or f"No summary stored for {meeting_id}."
-                self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    "applyDetails:", text, False
-                )
+                self.performSelectorOnMainThread_withObject_waitUntilDone_("applyDetails:", text, False)
             except Exception as exc:
                 logger.exception("History summary read failed")
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
@@ -256,9 +284,7 @@ class _HistoryController(NSObject):
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
                     "applyDetails:", f"Deleted meeting {meeting_id}.", False
                 )
-                self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    "refresh:", None, False
-                )
+                self.performSelectorOnMainThread_withObject_waitUntilDone_("refresh:", None, False)
             except Exception as exc:
                 logger.exception("History delete failed")
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
@@ -275,8 +301,7 @@ class _HistoryController(NSObject):
     def deleteAllAction_(self, sender) -> None:
         if not self._confirm(
             "Delete ALL Meetings",
-            "Permanently delete EVERY stored meeting (transcripts, summaries, "
-            "clips)? This cannot be undone.",
+            "Permanently delete EVERY stored meeting (transcripts, summaries, clips)? This cannot be undone.",
         ):
             return
         provider = self._provider
@@ -287,9 +312,7 @@ class _HistoryController(NSObject):
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
                     "applyDetails:", f"Deleted {removed} meeting(s).", False
                 )
-                self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    "refresh:", None, False
-                )
+                self.performSelectorOnMainThread_withObject_waitUntilDone_("refresh:", None, False)
             except Exception as exc:
                 logger.exception("History delete-all failed")
                 self.performSelectorOnMainThread_withObject_waitUntilDone_(
@@ -299,6 +322,29 @@ class _HistoryController(NSObject):
         threading.Thread(target=work, name="sv-history-nuke", daemon=True).start()
 
     # --- helpers ---------------------------------------------------------
+
+    def _ask_row(self, preserve_text: str = "") -> Any:
+        """The W1 question-input row: text field + Ask button (askAction_)."""
+        row = NSStackView.alloc().init()
+        row.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        row.setSpacing_(8)
+        self._question = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 560.0, 24.0))
+        self._question.setEditable_(True)
+        self._question.setSelectable_(True)
+        self._question.setPlaceholderString_("Ask your stored meetings…")
+        self._question.setStringValue_(preserve_text)
+        self._question.setTarget_(self)
+        self._question.setAction_("askAction:")  # Return in the field asks
+        self._question.widthAnchor().constraintEqualToConstant_(560.0).setActive_(True)
+        row.addArrangedSubview_(self._question)
+        row.addArrangedSubview_(NSButton.buttonWithTitle_target_action_("Ask", self, "askAction:"))
+        return row
+
+    def _focus_question(self) -> None:
+        """Keyboard focus on the question field (the Ask History entry path)."""
+        if self._question is not None and self.window is not None:
+            self.window.makeKeyAndOrderFront_(None)
+            self.window.makeFirstResponder_(self._question)
 
     def _meeting_row(self, index: int, meeting: dict) -> Any:
         row = NSStackView.alloc().init()
@@ -330,9 +376,7 @@ class _HistoryController(NSObject):
             "I understand Delete All is permanent", self, "deleteAllBoxAction:"
         )
         row.addArrangedSubview_(self._delete_all_box)
-        self._delete_all_button = NSButton.buttonWithTitle_target_action_(
-            "Delete All…", self, "deleteAllAction:"
-        )
+        self._delete_all_button = NSButton.buttonWithTitle_target_action_("Delete All…", self, "deleteAllAction:")
         self._delete_all_button.setEnabled_(False)  # checkbox gates it (two-key confirm)
         row.addArrangedSubview_(self._delete_all_button)
         return row
@@ -385,18 +429,24 @@ def _release_controller(controller: _HistoryController) -> None:
         _HISTORY_CONTROLLER = None
 
 
-def open_history_window(provider) -> None:
+def open_history_window(provider, *, focus_question: bool = False) -> None:
     """Open (or focus) the history / privacy dashboard window.
 
-    Must be called on the main thread — the HUD menu is the entry point, so
-    the NSApplication run loop is already live. The first snapshot scan runs
-    on a worker thread; the window shows a placeholder until it lands (H1).
+    ``focus_question`` (W1 D2, the Ask History menu path) additionally puts
+    keyboard focus in the question field. Must be called on the main thread —
+    the HUD menu is the entry point, so the NSApplication run loop is already
+    live. The first snapshot scan runs on a worker thread; the window shows a
+    placeholder until it lands (H1).
     """
     global _HISTORY_CONTROLLER
     if _HISTORY_CONTROLLER is not None and _HISTORY_CONTROLLER.window is not None:
         _HISTORY_CONTROLLER.window.makeKeyAndOrderFront_(None)
+        if focus_question:
+            _HISTORY_CONTROLLER._focus_question()
         return
     controller = _HistoryController.alloc().initWithProvider_(provider)
     controller.build_window()
     controller.window.makeKeyAndOrderFront_(None)
+    if focus_question:
+        controller._focus_question()
     _HISTORY_CONTROLLER = controller
