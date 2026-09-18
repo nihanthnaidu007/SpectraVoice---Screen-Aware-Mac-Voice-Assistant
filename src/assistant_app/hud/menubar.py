@@ -81,9 +81,7 @@ class MenuBarHUD(NSObject):
 
     def _observe(self, snapshot: HUDSnapshot) -> None:
         """State-machine observer: marshal the snapshot to the main thread."""
-        self.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "applySnapshot:", snapshot, False
-        )
+        self.performSelectorOnMainThread_withObject_waitUntilDone_("applySnapshot:", snapshot, False)
 
     # === main-thread rendering ===
 
@@ -109,9 +107,7 @@ class MenuBarHUD(NSObject):
     # === NSStatusItem / menu construction (main thread) ===
 
     def _build_status_item(self) -> None:
-        self._status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
-            NSVariableStatusItemLength
-        )
+        self._status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
         self._button = self._status_item.button()
         if self._button is None:
             # Pre-10.10 fallback: title lives on the item itself.
@@ -129,9 +125,7 @@ class MenuBarHUD(NSObject):
         self._listen_item = self._add_item(menu, listen_item_label(False), "onListenToggle:")
         self._pause_item = self._add_item(menu, pause_item_label(Privacy.OFF), "onPauseToggle:")
         self._meeting_item = self._add_item(menu, meeting_item_label(None), "onMeetingToggle:")
-        self._meeting_pause_item = self._add_item(
-            menu, meeting_pause_item_label(None), "onMeetingPause:"
-        )
+        self._meeting_pause_item = self._add_item(menu, meeting_pause_item_label(None), "onMeetingPause:")
         # A meeting with no consent gate can never start — the item must not
         # offer the action (D2: the HUD reflects the gate, never bypasses it).
         self._meeting_pause_item.setEnabled_(False)
@@ -145,6 +139,8 @@ class MenuBarHUD(NSObject):
         # (menu_summary); this item only OPENS the window — no destructive
         # action lives behind a menu click (spec fork 3).
         self._add_item(menu, "History\u2026", "onHistory_")
+        # W1 D2: the ask entry point — same window, question field focused.
+        self._add_item(menu, "Ask History\u2026", "onAskHistory_")
         self._add_item(menu, "Settings\u2026", "onSettings_")
         quit_item = self._add_item(menu, "Quit SpectraVoice", "onQuit_")
         quit_item.setKeyEquivalent_(QUIT_KEY)
@@ -182,6 +178,9 @@ class MenuBarHUD(NSObject):
 
     def onHistory_(self, sender) -> None:
         self._actions.open_history()
+
+    def onAskHistory_(self, sender) -> None:
+        self._actions.ask_history()
 
     def onSettings_(self, sender) -> None:
         self._actions.open_settings()

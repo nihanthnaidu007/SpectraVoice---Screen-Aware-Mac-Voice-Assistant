@@ -28,6 +28,7 @@ class ConsentState:
     meeting_kill_switch: bool  # meeting.enabled — the config kill-switch
     meeting_armed: bool  # explicit per-meeting start (RecordingConsent.armed)
     screen_consent: bool  # PrivacyConsent.screen_upload_allowed
+    cloud_qa_consent: bool = False  # history.cloud_qa_consent (W1 cloud Q&A)
 
 
 @dataclass(frozen=True)
@@ -48,12 +49,13 @@ class HistorySnapshot:
     consent: ConsentState = field(default_factory=ConsentState)
 
 
-def consent_state_from(recording_consent, privacy_consent) -> ConsentState:
+def consent_state_from(recording_consent, privacy_consent, *, cloud_qa_consent: bool = False) -> ConsentState:
     """Read the live gates (duck-typed: the real gates or test fakes)."""
     return ConsentState(
         meeting_kill_switch=bool(recording_consent.feature_enabled),
         meeting_armed=bool(recording_consent.armed),
         screen_consent=bool(privacy_consent.screen_upload_allowed),
+        cloud_qa_consent=bool(cloud_qa_consent),
     )
 
 
@@ -83,6 +85,7 @@ def build_history_snapshot(
     *,
     live_meeting_ids: frozenset[str] | set[str] = frozenset(),
     last_sweep: dict | None = None,
+    cloud_qa_consent: bool = False,
     now_fn: Callable[[], float] = time.time,
 ) -> HistorySnapshot:
     """Scan the corpus + read the gates into one renderable snapshot.
@@ -91,13 +94,11 @@ def build_history_snapshot(
     runs on a WORKER thread — the HUD window dispatches it off the main
     thread and renders the finished value (clock-thread precedent).
     """
-    meetings = history_search.scan_history(
-        meeting_cfg, live_meeting_ids=live_meeting_ids, now_fn=now_fn
-    )
+    meetings = history_search.scan_history(meeting_cfg, live_meeting_ids=live_meeting_ids, now_fn=now_fn)
     return HistorySnapshot(
         meetings=tuple(meetings),
         retention=retention_state_from(meeting_cfg, last_sweep),
-        consent=consent_state_from(recording_consent, privacy_consent),
+        consent=consent_state_from(recording_consent, privacy_consent, cloud_qa_consent=cloud_qa_consent),
     )
 
 
@@ -135,14 +136,13 @@ def format_retention_line(retention: RetentionState) -> str:
         sweep = "startup sweep has not run yet"
     else:
         sweep = (
-            f"last sweep removed {retention.last_sweep_removed} artifact(s) "
-            f"at {_iso_brief(retention.last_sweep_at)}"
+            f"last sweep removed {retention.last_sweep_removed} artifact(s) at {_iso_brief(retention.last_sweep_at)}"
         )
     return f"Retention: {setting} — {sweep}"
 
 
 def format_consent_lines(consent: ConsentState) -> list[str]:
-    """Two-axis consent reflection: meeting (kill-switch + arm), screen."""
+    """Three-axis consent reflection: meeting (kill-switch + arm), screen, QA."""
     if not consent.meeting_kill_switch:
         meeting = "Meeting recording: kill-switch ON (recording disabled)"
     elif consent.meeting_armed:
@@ -150,7 +150,8 @@ def format_consent_lines(consent: ConsentState) -> list[str]:
     else:
         meeting = "Meeting recording: enabled, not armed (no meeting started)"
     screen = "Screen upload: allowed" if consent.screen_consent else "Screen upload: OFF (local-only)"
-    return [meeting, screen]
+    qa = "History Q&A: cloud allowed (explicit consent)" if consent.cloud_qa_consent else "History Q&A: local-only"
+    return [meeting, screen, qa]
 
 
 def format_history_snapshot(snapshot: HistorySnapshot) -> str:

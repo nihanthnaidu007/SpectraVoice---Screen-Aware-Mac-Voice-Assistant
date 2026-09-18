@@ -45,6 +45,10 @@ class HUDActions(Protocol):
         """Open the history / privacy dashboard window (W4 D2)."""
         ...
 
+    def ask_history(self) -> None:
+        """Open the history window focused on the Ask input (W1 D2)."""
+        ...
+
     def quit(self) -> None:
         """Full shutdown: stop workers, persist state, terminate the app."""
         ...

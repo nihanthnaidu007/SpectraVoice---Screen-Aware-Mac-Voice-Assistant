@@ -300,6 +300,13 @@ history:
   # the destination — the dashboard panel and the CLI DIR argument still
   # override it.
   export_dir: ""
+  # Cloud Q&A consent (W1): asking about your stored meetings runs on the
+  # configured LOCAL Ollama model by default, and answers are rendered in the
+  # history window — never spoken (the only TTS in the stack is cloud-hosted,
+  # which would be an unconsented egress path). Sending question excerpts to
+  # the cloud additionally requires this explicit flag; it stays separate
+  # from meeting.cloud_consent on purpose.
+  cloud_qa_consent: false
 
 # Auto-Restart Supervisor (W2)
 # When enabled, `python main.py` runs the assistant as a supervised child and
