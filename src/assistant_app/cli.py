@@ -135,7 +135,9 @@ LLM Provider Options:
         "--history-list",
         action="store_true",
         help="List every stored meeting (id, date, duration, utterances, gaps, "
-        "summary) from the local corpus and exit. Read-only.",
+        "summary) from the local corpus and exit. Read-only. This headless "
+        "process is not the recorder, so a meeting recording right now shows "
+        "without the [RECORDING] flag — check the menu-bar HUD for live state.",
     )
     parser.add_argument(
         "--history-search",

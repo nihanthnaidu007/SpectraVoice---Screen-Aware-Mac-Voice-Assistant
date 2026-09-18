@@ -96,6 +96,29 @@ def normalize_spacing(text: str) -> str:
     return re.sub(r"([,;:!?])(?=[A-Za-z0-9])", r"\1 ", text)
 
 
+# === persisted-clip retention (W3 D4/R2: one mechanism, second consumer) ===
+
+
+def clips_directory(audio_dir: str) -> str:
+    """Persisted-clip directory: the configured override or the default location."""
+    return audio_dir or os.path.join("logs", "dictation_audio")
+
+
+def prune_persisted_clips(audio_dir: str, retention_hours: float) -> int:
+    """Sweep persisted dictation clips with the shared retention mechanism (W3 D4).
+
+    The second consumer of utils/retention (spec R2: one mechanism for meeting
+    directories and dictation clips) — without this call the dictation
+    retention knob is validated but never executed. It runs from the startup
+    sweep regardless of dictation.enabled (disabling the feature must not
+    orphan old clips — the H9 lesson) and deletes only from the local clip
+    directory: nothing is uploaded, ever. retention_hours 0 keeps clips forever.
+    """
+    from assistant_app.utils.retention import prune_expired
+
+    return prune_expired(clips_directory(audio_dir), retention_hours, log=get_logger(__name__))
+
+
 @dataclass
 class TextCleaner:
     """Transcript cleanup pipeline: snippets -> filler removal -> spacing.
@@ -527,7 +550,7 @@ class DictationController:
         self._write_wav(wav_bytes, timestamp if timestamp is not None else time.time())
 
     def _write_wav(self, wav_bytes: bytes, timestamp: float) -> None:
-        directory = self.cfg.audio_dir or os.path.join("logs", "dictation_audio")
+        directory = clips_directory(self.cfg.audio_dir)
         os.makedirs(directory, exist_ok=True)
         path = os.path.join(directory, f"dictation_{int(timestamp * 1000)}.wav")
         try:

@@ -290,6 +290,17 @@ meeting:
   # summarized per chunk, then reduced into the final summary.
   chunk_chars: 6000
 
+# History & Privacy Dashboard (W4)
+# Knobs for the history surface (privacy dashboard, search, headless CLI).
+# Search itself has no settings (scan-on-query by design) and retention stays
+# on the meeting/dictation sections — one shared mechanism (W3 D4).
+history:
+  # Default export destination for meeting transcripts ("" = ask every time).
+  # Export is the only off-corpus path; a configured default just pre-fills
+  # the destination — the dashboard panel and the CLI DIR argument still
+  # override it.
+  export_dir: ""
+
 # Auto-Restart Supervisor (W2)
 # When enabled, `python main.py` runs the assistant as a supervised child and
 # restarts it after an unhandled crash. All child output — including the Wave 0
