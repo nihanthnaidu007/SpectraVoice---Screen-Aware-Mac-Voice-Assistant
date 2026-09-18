@@ -73,6 +73,12 @@ class AssistantHUDActions:
     def toggle_pause(self) -> None:
         self._assistant.toggle_pause()
 
+    def toggle_screen_consent(self) -> None:
+        self._assistant.toggle_screen_consent()
+
+    def current_screen_consent(self) -> bool:
+        return self._assistant.screen_consent_enabled()
+
     def switch_dictation_mode(self) -> None:
         if self._assistant.dictation is not None:
             self._assistant.dictation.on_mode_toggle()
@@ -90,10 +96,12 @@ class AssistantHUDActions:
 
     def open_settings(self) -> None:
         # settings_window is darwin-only (lazy import raises ImportError with
-        # an explicit message off-darwin).
+        # an explicit message off-darwin). The orchestrator rides along as the
+        # consent provider (W2 S1): the settings window's toggle row reaches
+        # the same gate the HUD menu does.
         from assistant_app.hud.settings_window import open_settings_window
 
-        open_settings_window(self._assistant.config_manager)
+        open_settings_window(self._assistant.config_manager, consent_provider=self._assistant)
 
     def open_history(self) -> None:
         # history_window is darwin-only (lazy import raises ImportError with
@@ -328,6 +336,33 @@ class SpectraVoiceAssistant:
             self.resume_screen_sharing()
         else:
             self.pause_screen_sharing()
+
+    # === CONSENT YOU CAN SEE (W2 S1) ===
+    # The in-UI grant/revoke path. It delegates to the gate through
+    # Assistant.set_screen_consent — the same PrivacyConsent every consumer
+    # reads — so consent semantics are unchanged: OFF (no consent) and PAUSED
+    # still block vision upload (vision_calls == 0, testable). The grant is a
+    # runtime decision: it lives in the gate for this process, and the
+    # SPECTRAVOICE_SCREEN_CONSENT env default applies again on next launch.
+
+    def screen_consent_enabled(self) -> bool:
+        """Whether screen-upload consent is currently granted (menu/settings label)."""
+        return self.privacy_consent.consented
+
+    def set_screen_consent(self, enabled: bool) -> None:
+        """Grant/revoke screen consent in the running app (HUD menu, settings)."""
+        self.assistant.set_screen_consent(enabled)  # the phase-0 method, now reachable in production
+        if enabled:
+            self.logger.info("👁️ Screen consent granted — screenshots are sent with each query to the LLM provider")
+            print("👁️ Screen consent GRANTED — every query now sends a screenshot of your screen to your LLM provider")
+            print("   (revoke anytime from the HUD menu; the env default applies again on next launch)")
+        else:
+            self.logger.info("🔒 Screen consent revoked — queries run without vision")
+            print("🔒 Screen consent revoked — I will answer without seeing your screen")
+
+    def toggle_screen_consent(self) -> None:
+        """HUD menu / settings entry point: flip consent through the gate."""
+        self.set_screen_consent(not self.privacy_consent.consented)
 
     # === HISTORY / PRIVACY DASHBOARD (W4 D2) ===
     # The dashboard reflects and controls consent — it never bypasses a gate.

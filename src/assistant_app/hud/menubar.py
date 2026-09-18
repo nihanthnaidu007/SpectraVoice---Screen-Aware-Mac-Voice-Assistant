@@ -43,6 +43,7 @@ from assistant_app.hud.state import (
     HUDSnapshot,
     HUDStateMachine,
     Privacy,
+    consent_item_label,
     icon_text,
     listen_item_label,
     meeting_item_label,
@@ -97,6 +98,9 @@ class MenuBarHUD(NSObject):
         if self._pause_item is not None:
             self._pause_item.setTitle_(pause_item_label(snapshot.privacy))
             self._pause_item.setEnabled_(pause_item_enabled(snapshot.privacy))
+        if self._consent_item is not None:
+            # Live label: the grant/revoke offer follows the gate (S1).
+            self._consent_item.setTitle_(consent_item_label(snapshot.privacy))
         if self._meeting_item is not None:
             self._meeting_item.setTitle_(meeting_item_label(snapshot.meeting))
         if self._meeting_pause_item is not None:
@@ -124,6 +128,15 @@ class MenuBarHUD(NSObject):
 
         self._listen_item = self._add_item(menu, listen_item_label(False), "onListenToggle:")
         self._pause_item = self._add_item(menu, pause_item_label(Privacy.OFF), "onPauseToggle:")
+        # W2 S1: consent you can see — the grant/revoke toggle sits with the
+        # privacy controls it belongs to (right below pause). The tooltip says
+        # what consent actually shares; the gate itself stays unchanged.
+        self._consent_item = self._add_item(menu, consent_item_label(Privacy.OFF), "onConsentToggle:")
+        self._consent_item.setToolTip_(
+            "When consent is granted, every query sends a screenshot of your "
+            "screen to your LLM provider (local or cloud). Revoking returns "
+            "answers to text-only. Off or paused always keeps screen upload blocked."
+        )
         self._meeting_item = self._add_item(menu, meeting_item_label(None), "onMeetingToggle:")
         self._meeting_pause_item = self._add_item(menu, meeting_pause_item_label(None), "onMeetingPause:")
         # A meeting with no consent gate can never start — the item must not
@@ -162,6 +175,9 @@ class MenuBarHUD(NSObject):
 
     def onPauseToggle_(self, sender) -> None:
         self._actions.toggle_pause()
+
+    def onConsentToggle_(self, sender) -> None:
+        self._actions.toggle_screen_consent()
 
     def onDictationMode_(self, sender) -> None:
         self._actions.switch_dictation_mode()

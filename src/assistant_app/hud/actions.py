@@ -21,6 +21,15 @@ class HUDActions(Protocol):
         """Pause/resume screen sharing via the consent gate (never bypass it)."""
         ...
 
+    def toggle_screen_consent(self) -> None:
+        """Grant/revoke screen consent via the gate (W2 S1: consent you can
+        see) — the in-UI path to the same consent every consumer reads."""
+        ...
+
+    def current_screen_consent(self) -> bool:
+        """Whether screen consent is currently granted, for the menu label."""
+        ...
+
     def switch_dictation_mode(self) -> None:
         """Cycle the W1 dictation mode (push-to-talk <-> VAD) via config."""
         ...
