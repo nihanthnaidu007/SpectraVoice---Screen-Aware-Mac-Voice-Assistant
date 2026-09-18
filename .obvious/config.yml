@@ -1,0 +1,10 @@
+# Repository policy for obvious agents.
+# Values auto-detected from GitHub repo settings on 2026-09-17.
+repo: nihanthnaidu007/SpectraVoice---Screen-Aware-Mac-Voice-Assistant
+defaultBranch: main
+merge:
+  # Repo allows merge, squash, and rebase; squash chosen for setup PRs.
+  method: squash
+  deleteBranchOnMerge: false
+branches:
+  setupPrBase: main
