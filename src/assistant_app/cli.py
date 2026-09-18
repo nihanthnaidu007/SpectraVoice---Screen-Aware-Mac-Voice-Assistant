@@ -170,6 +170,15 @@ LLM Provider Options:
         "the ONLY path that moves meeting data off the corpus directory.",
     )
     parser.add_argument(
+        "--history-format",
+        type=str,
+        default=None,
+        metavar="FORMAT",
+        help="With --history-export: write the meeting transcript as one "
+        "formatted file — srt, vtt, markdown, or json — instead of copying "
+        "the meeting directory. Local file only; nothing is uploaded.",
+    )
+    parser.add_argument(
         "--history-delete",
         type=str,
         default=None,
@@ -441,7 +450,21 @@ def _run_history(args) -> int:
             print("\u274c --history-export takes MEETING_ID and an optional DIR")
             return 2
         try:
-            out = history_ops.export_meeting(meeting_cfg, meeting_id, dest)
+            if args.history_format:
+                from assistant_app.services import transcript_export  # local: keeps cli import-light
+
+                try:
+                    out = transcript_export.write_transcript_export(
+                        meeting_cfg, meeting_id, dest, args.history_format
+                    )
+                except ValueError as exc:
+                    print(f"\u274c {exc}")
+                    return 2
+                except FileNotFoundError as exc:
+                    print(f"\u274c {exc}")
+                    return 1
+            else:
+                out = history_ops.export_meeting(meeting_cfg, meeting_id, dest)
         except history_ops.HistoryLookupError as exc:
             print(f"\u274c {exc}")
             return 1
