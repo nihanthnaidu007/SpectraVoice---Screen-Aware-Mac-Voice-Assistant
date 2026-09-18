@@ -98,13 +98,18 @@ api:
   # Maximum retry attempts for failed requests
   max_retries: 3
 
-# Hotkey Settings (not yet implemented)
+# Hotkey Settings (all wired — dictation PTT/mode and mute/pause/meeting/quit
+# fire through the pynput global listener when the app is running; global
+# capture needs the Accessibility permission, otherwise use the HUD menu)
 hotkeys:
   # Toggle mute
   mute_toggle: cmd+shift+m
   
-  # Push-to-talk key
+  # Push-to-talk key (hold while speaking, dictation must be enabled)
   push_to_talk: space
+  
+  # Tap to cycle dictation activation (push_to_talk <-> vad)
+  dictation_mode: cmd+shift+d
   
   # Pause/resume assistant
   pause_resume: cmd+shift+p
