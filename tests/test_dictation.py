@@ -6,9 +6,12 @@ so no SpeechRecognition, PyAudio, Whisper, pynput, or macOS is required —
 mirrors the constraints in tests/test_transcription_worker.py.
 """
 
+import ast
 import os
 import sys
 import threading
+import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -524,6 +527,74 @@ class TestAudioRetention:
         )
         controller.record_audio(object())
         assert list(tmp_path.iterdir()) == []
+
+
+class TestClipRetentionSweep:
+    """G1 (phase-2 audit): dictation.retention_hours must actually execute.
+
+    Mirrors the H9 meeting tests (tests/test_history_ops.py): the sweep is
+    the startup janitor's job — it runs with no dashboard, no controller,
+    and no dictation session, and 0 hours keeps clips forever.
+    """
+
+    def _aged_clip(self, tmp_path, hours):
+        clip = tmp_path / "dictation_1.wav"
+        clip.write_bytes(b"x")
+        aged = time.time() - hours * 3600.0
+        os.utime(clip, (aged, aged))  # file mtime governs the TTL
+        return clip
+
+    def test_old_clip_is_swept_when_retention_is_set(self, tmp_path):
+        clip = self._aged_clip(tmp_path, hours=10.0)
+        assert dictation_module.prune_persisted_clips(str(tmp_path), 1.0) == 1
+        assert not clip.exists()
+
+    def test_zero_retention_keeps_clips_forever(self, tmp_path):
+        clip = self._aged_clip(tmp_path, hours=10.0)
+        assert dictation_module.prune_persisted_clips(str(tmp_path), 0.0) == 0
+        assert clip.exists()
+
+    def test_recent_clip_survives_the_sweep(self, tmp_path):
+        clip = self._aged_clip(tmp_path, hours=0.1)
+        assert dictation_module.prune_persisted_clips(str(tmp_path), 24.0) == 0
+        assert clip.exists()
+
+    def test_missing_clip_directory_is_not_an_error(self):
+        missing = str(Path("/nonexistent") / "dictation_audio")
+        assert dictation_module.prune_persisted_clips(missing, 24.0) == 0
+
+    def test_sweep_runs_headless_no_ui_imports(self):
+        """The janitor runs without the dashboard: dictation.py must stay free
+        of HUD/AppKit/io imports so the sweep works on headless Linux startup."""
+        tree = ast.parse(Path(dictation_module.__file__).read_text(encoding="utf-8"))
+        imported = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+        imported += [
+            node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
+        ]
+        offenders = [
+            name
+            for name in imported
+            if name.startswith(("assistant_app.hud", "assistant_app.io", "AppKit", "Foundation", "Quartz"))
+        ]
+        assert offenders == []
+
+    def test_orchestrator_startup_sweep_covers_dictation_clips(self):
+        """Wiring pin: the orchestrator's startup sweep must call the dictation
+        prune. The orchestrator is unimportable on Linux (R9), so the call site
+        is checked structurally — the menu-structure precedent."""
+        orchestrator = Path(dictation_module.__file__).parents[0] / "spectravoice_assistant.py"
+        tree = ast.parse(orchestrator.read_text(encoding="utf-8"))
+        called = {
+            node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        imported = [
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "assistant_app.services.dictation"
+            for alias in node.names
+        ]
+        assert "prune_persisted_clips" in called
+        assert "prune_persisted_clips" in imported
 
 
 class TestStatusLine:

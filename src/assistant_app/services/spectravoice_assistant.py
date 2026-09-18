@@ -21,7 +21,7 @@ from assistant_app.io.audio.voice_detector import SmartVoiceDetector
 from assistant_app.io.hotkeys import DictationHotkeyListener, parse_hotkey
 from assistant_app.io.indicator import start_indicator, stop_indicator, update_status
 from assistant_app.io.vision.screen_capture import ScreenCapture
-from assistant_app.services.dictation import DictationController
+from assistant_app.services.dictation import DictationController, prune_persisted_clips
 from assistant_app.services.meeting import MeetingController, run_startup_cleanup
 from assistant_app.services.meeting_summary import build_summarizer
 from assistant_app.services.transcription import TranscriptionWorker
@@ -260,6 +260,10 @@ class SpectraVoiceAssistant:
         # (RetentionState.last_sweep_*); nothing is persisted (H3/H5).
         self._last_sweep: dict | None = None
         sweep = run_startup_cleanup(cfg.meeting)  # D4/H9: TTL sweep runs regardless
+        # R2's second consumer: persisted dictation clips ride the same janitor
+        # path (dictation.retention_hours, 0 = keep forever) — swept regardless
+        # of dictation.enabled, local disk only, never uploaded.
+        sweep += prune_persisted_clips(cfg.dictation.audio_dir, cfg.dictation.retention_hours)
         self._last_sweep = {"removed": sweep, "at": time.time()}
         if cfg.meeting.enabled:
             self.meeting = MeetingController(
